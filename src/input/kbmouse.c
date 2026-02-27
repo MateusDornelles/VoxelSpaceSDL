@@ -66,6 +66,9 @@ static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
 			map->optimize ^= 1;
 			map->redraw = 1;
 			break;
+		case SDL_SCANCODE_I:
+			Engine_ToggleIntegerScale2x();
+			break;
 		case SDL_SCANCODE_RETURN:
 			if((mod & KMOD_ALT) != 0)
 				Engine_ToggleFullscreen();
@@ -136,8 +139,8 @@ static int ProcessKeyboard(Camera *cam, float dm) {
 	}
 
 	/*
-		Рисуем мир заново, если была нажата
-		хоть какая-то кнопка из зарезервированных.
+		Redraw the world if at least one
+		registered key is pressed.
 	*/
 	for(int i = 0; i < INPUT_MAX_KEYBINDS; i++)
 		if(input[i]) return 1;

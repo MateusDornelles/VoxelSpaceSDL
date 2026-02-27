@@ -14,9 +14,15 @@ struct sContext {
 	Uint64 lastTime, currTime;
 	float deltaTime;
 	Uint32 stopped;
+	struct {
+		Uint64 sampleStart;
+		Uint32 sampleFrames;
+		float value;
+	} fps;
 	SDL_Window *wnd;
 	SDL_Renderer *render;
 	SDL_Texture *screen;
+	int integerScale2x;
 	struct sListener {
 		void(*func)(void *);
 		struct sListener *next;
@@ -29,6 +35,9 @@ struct sContext {
 		.position = CAMERA_POSITION_DEFAULT,
 		.height = CAMERA_HEIGHT_DEFAULT,
 		.distance = CAMERA_DISTANCE_DEFAULT
+	},
+	.map = {
+		.ceilingBase = 520.0f
 	}
 };
 
@@ -40,23 +49,152 @@ static void CompareSDLVersions(const char *libname, const SDL_version *cv, const
 	} else SDL_Log("%s library version: %d.%d.%d", libname, cv->major, cv->minor, cv->patch);
 }
 
-static int SpawnScreen(void) {
+enum {
+	SEG_A = (1 << 0),
+	SEG_B = (1 << 1),
+	SEG_C = (1 << 2),
+	SEG_D = (1 << 3),
+	SEG_E = (1 << 4),
+	SEG_F = (1 << 5),
+	SEG_G = (1 << 6)
+};
+
+static Uint8 SevenSegMaskForChar(char c) {
+	switch(c) {
+		case '0': return SEG_A | SEG_B | SEG_C | SEG_D | SEG_E | SEG_F;
+		case '1': return SEG_B | SEG_C;
+		case '2': return SEG_A | SEG_B | SEG_G | SEG_E | SEG_D;
+		case '3': return SEG_A | SEG_B | SEG_G | SEG_C | SEG_D;
+		case '4': return SEG_F | SEG_G | SEG_B | SEG_C;
+		case '5': return SEG_A | SEG_F | SEG_G | SEG_C | SEG_D;
+		case '6': return SEG_A | SEG_F | SEG_G | SEG_E | SEG_C | SEG_D;
+		case '7': return SEG_A | SEG_B | SEG_C;
+		case '8': return SEG_A | SEG_B | SEG_C | SEG_D | SEG_E | SEG_F | SEG_G;
+		case '9': return SEG_A | SEG_B | SEG_C | SEG_D | SEG_F | SEG_G;
+		case 'F': return SEG_A | SEG_E | SEG_F | SEG_G;
+		case 'P': return SEG_A | SEG_B | SEG_E | SEG_F | SEG_G;
+		case 'S': return SEG_A | SEG_F | SEG_G | SEG_C | SEG_D;
+		default: return 0;
+	}
+}
+
+static void DrawSevenSegMask(SDL_Renderer *renderer, Uint8 mask, int x, int y, int scale) {
+	const int t = max(scale, 1);
+	const int h = t * 4;
+	const int v = t * 5;
+
+	if(mask & SEG_A) SDL_RenderFillRect(renderer, &(SDL_Rect){x + t, y, h, t});
+	if(mask & SEG_B) SDL_RenderFillRect(renderer, &(SDL_Rect){x + t + h, y + t, t, v});
+	if(mask & SEG_C) SDL_RenderFillRect(renderer, &(SDL_Rect){x + t + h, y + (2 * t) + v, t, v});
+	if(mask & SEG_D) SDL_RenderFillRect(renderer, &(SDL_Rect){x + t, y + (2 * v) + (2 * t), h, t});
+	if(mask & SEG_E) SDL_RenderFillRect(renderer, &(SDL_Rect){x, y + (2 * t) + v, t, v});
+	if(mask & SEG_F) SDL_RenderFillRect(renderer, &(SDL_Rect){x, y + t, t, v});
+	if(mask & SEG_G) SDL_RenderFillRect(renderer, &(SDL_Rect){x + t, y + t + v, h, t});
+}
+
+static int SevenSegCharWidth(char c, int scale) {
+	const int t = max(scale, 1);
+	const int glyphWidth = (t * 4) + (2 * t);
+
+	if(c == ' ')
+		return glyphWidth / 2;
+	return glyphWidth;
+}
+
+static int DrawSevenSegChar(SDL_Renderer *renderer, char c, int x, int y, int scale) {
+	const int t = max(scale, 1);
+	const int glyphWidth = SevenSegCharWidth(c, scale);
+
+	if(c == '.') {
+		const int v = t * 5;
+		SDL_RenderFillRect(renderer, &(SDL_Rect){x + glyphWidth - t, y + (2 * v) + (2 * t), t, t});
+		return glyphWidth;
+	}
+	if(c == ' ')
+		return glyphWidth;
+
+	DrawSevenSegMask(renderer, SevenSegMaskForChar(c), x, y, scale);
+	return glyphWidth;
+}
+
+static void DrawFPSCounter(void) {
 	int width, height;
-	SDL_GetWindowSize(ctx.wnd, &width, &height);
+	if(SDL_GetRendererOutputSize(ctx.render, &width, &height) != 0)
+		return;
+	(void)height;
+
+	const int scale = 2;
+	const int gap = scale * 2;
+	const int margin = 10;
+	const int padding = 6;
+	const int glyphHeight = (2 * (scale * 5)) + (3 * scale);
+	char text[24];
+	SDL_snprintf(text, sizeof(text), "FPS %.0f", ctx.fps.value);
+
+	int textWidth = 0;
+	for(size_t i = 0; text[i]; i++)
+		textWidth += SevenSegCharWidth(text[i], scale) + gap;
+	if(textWidth > 0)
+		textWidth -= gap;
+
+	const SDL_Rect bg = {
+		.x = max(width - textWidth - (padding * 2) - margin, margin),
+		.y = margin,
+		.w = textWidth + (padding * 2),
+		.h = glyphHeight + (padding * 2)
+	};
+
+	SDL_BlendMode oldBlendMode;
+	SDL_GetRenderDrawBlendMode(ctx.render, &oldBlendMode);
+	SDL_SetRenderDrawBlendMode(ctx.render, SDL_BLENDMODE_BLEND);
+	SDL_SetRenderDrawColor(ctx.render, 0, 0, 0, 140);
+	SDL_RenderFillRect(ctx.render, &bg);
+
+	SDL_SetRenderDrawColor(ctx.render, 255, 255, 90, 255);
+	int x = bg.x + padding;
+	for(size_t i = 0; text[i]; i++)
+		x += DrawSevenSegChar(ctx.render, text[i], x, bg.y + padding, scale) + gap;
+	SDL_SetRenderDrawBlendMode(ctx.render, oldBlendMode);
+}
+
+static int SpawnScreen(void) {
+	int wndWidth = 0, wndHeight = 0;
+	int renderWidth = 0, renderHeight = 0;
+	float horizonRatio = 0.5f;
+	SDL_GetWindowSize(ctx.wnd, &wndWidth, &wndHeight);
+	if(ctx.integerScale2x) {
+		renderWidth = max(wndWidth / 2, 1);
+		renderHeight = max(wndHeight / 2, 1);
+	} else {
+		renderWidth = wndWidth;
+		renderHeight = wndHeight;
+	}
+
+	if(ctx.camera.maxhorizon > 0.0f)
+		horizonRatio = ctx.camera.horizon / ctx.camera.maxhorizon;
+
 	if(ctx.screen) SDL_DestroyTexture(ctx.screen);
 	ctx.screen = SDL_CreateTexture(ctx.render,
 		SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
-		width, height
+		renderWidth, renderHeight
 	);
-	ctx.camera.maxhorizon = (float)height;
-	ctx.camera.horizon = height / 2.0f;
+	if(ctx.screen == NULL)
+		return 1;
+
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+	SDL_SetTextureScaleMode(ctx.screen, SDL_ScaleModeNearest);
+#endif
+	ctx.camera.maxhorizon = (float)renderHeight;
+	ctx.camera.horizon = horizonRatio * ctx.camera.maxhorizon;
+	ctx.camera.horizon = max(-ctx.camera.maxhorizon, min(ctx.camera.horizon, ctx.camera.maxhorizon));
 	Map_SetScreen(&ctx.map, ctx.screen);
-	return ctx.screen == NULL;
+	return 0;
 }
 
 int Engine_Start(EngineSettings *es) {
 	SDL_SetMainReady();
-	// Инициализируем SDL
+	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+	// Initialize SDL
 	if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
 		if(SDL_Init(SDL_INIT_VIDEO) != 0) {
 			SDL_LogCritical(0, "SDL_Init failed: %s", SDL_GetError());
@@ -93,8 +231,8 @@ int Engine_Start(EngineSettings *es) {
 	Engine_CallListeners(LISTEN_SDL_WINDOW, ctx.wnd);
 
 	/*
-		Ищем у пользователя рендерер, подходящий
-		под наши рендерерские запросы.
+		Find a renderer that matches
+		our rendering requirements.
 	*/
 	Uint32 rflags = SDL_RENDERER_TARGETTEXTURE;
 	if(es->vsync) rflags |= SDL_RENDERER_PRESENTVSYNC;
@@ -112,15 +250,15 @@ int Engine_Start(EngineSettings *es) {
 
 #ifdef USE_THREADED_RENDER
 	/*
-		Устанавливаем количество потоков, используемых для рисования картинки.
-		TODO: Сделать установку этого значения не настолько через жопу.
+		Set the number of threads used for rendering.
+		TODO: Expose this setting in a cleaner way.
 	*/
 	ctx.map.rctxcnt = es->numthreads;
 #endif
 
 	/*
-		Создаём текстуру, которая будет использоваться
-		для хранения последнего отрисованного кадра.
+		Create a texture that stores
+		the most recently rendered frame.
 	*/
 	if(SpawnScreen()) {
 		SDL_LogCritical(0, "Failed to create SDL texture: %s", SDL_GetError());
@@ -128,7 +266,16 @@ int Engine_Start(EngineSettings *es) {
 	}
 
 	if(es->diffusemap && es->heightmap)
-		Map_Open(&ctx.map, es->diffusemap, es->heightmap);
+		Map_OpenDual(
+			&ctx.map,
+			es->diffusemap, es->heightmap,
+			es->ceilingdiffusemap ? es->ceilingdiffusemap : es->diffusemap,
+			es->ceilingheightmap ? es->ceilingheightmap : es->heightmap
+		);
+
+	ctx.fps.sampleStart = SDL_GetPerformanceCounter();
+	ctx.fps.sampleFrames = 0;
+	ctx.fps.value = 0.0f;
 
 	Engine_CallListeners(LISTEN_ENGINE_START, NULL);
 	return 0;
@@ -152,7 +299,7 @@ void Engine_CallListeners(Listeners type, void *arg) {
 
 int Engine_Update(void) {
 	if(ctx.stopped) return 0;
-	// Обрабатываем накопившиеся эвенты SDL
+	// Handle queued SDL events
 	SDL_Event ev;
 	while(SDL_PollEvent(&ev)) {
 		switch(ev.type) {
@@ -170,19 +317,43 @@ int Engine_Update(void) {
 		}
 	}
 
-	// Выполняем все функции, ждущие события UPDATE
+	// Run all listeners waiting for UPDATE
 	Engine_CallListeners(LISTEN_ENGINE_UPDATE, &ctx.deltaTime);
 
-	// Перерисовываем мир
+	// Redraw the world
 	Map_Draw(&ctx.map, &ctx.camera);
 
-	// Рисуем в SDL окне нашу текстуру
+	// Present our texture in the SDL window
 	SDL_RenderClear(ctx.render);
-	SDL_RenderCopy(ctx.render, ctx.screen, NULL, NULL);
+	if(ctx.integerScale2x) {
+		int wndWidth = 0, wndHeight = 0, renderWidth = 0, renderHeight = 0;
+		SDL_GetRendererOutputSize(ctx.render, &wndWidth, &wndHeight);
+		SDL_QueryTexture(ctx.screen, NULL, NULL, &renderWidth, &renderHeight);
+		SDL_Rect dst = {
+			.x = (wndWidth - (renderWidth * 2)) / 2,
+			.y = (wndHeight - (renderHeight * 2)) / 2,
+			.w = renderWidth * 2,
+			.h = renderHeight * 2
+		};
+		SDL_RenderCopy(ctx.render, ctx.screen, NULL, &dst);
+	} else
+		SDL_RenderCopy(ctx.render, ctx.screen, NULL, NULL);
 	Engine_CallListeners(LISTEN_ENGINE_DRAW, ctx.render);
+	DrawFPSCounter();
 	SDL_RenderPresent(ctx.render);
 
-	// Считаем время, затраченное на полный тик
+	ctx.fps.sampleFrames++;
+	if(ctx.fps.sampleStart > 0) {
+		const Uint64 now = SDL_GetPerformanceCounter();
+		const double elapsed = (double)(now - ctx.fps.sampleStart) / SDL_GetPerformanceFrequency();
+		if(elapsed >= 0.25) {
+			ctx.fps.value = (float)(ctx.fps.sampleFrames / elapsed);
+			ctx.fps.sampleFrames = 0;
+			ctx.fps.sampleStart = now;
+		}
+	}
+
+	// Compute time spent on the full tick
 	ctx.lastTime = ctx.currTime;
 	ctx.currTime = SDL_GetPerformanceCounter();
 	if(ctx.lastTime > 0) {
@@ -196,6 +367,15 @@ void Engine_ToggleFullscreen(void) {
 	Uint32 flags = SDL_GetWindowFlags(ctx.wnd);
 	flags ^= SDL_WINDOW_FULLSCREEN_DESKTOP;
 	SDL_SetWindowFullscreen(ctx.wnd, flags);
+	if(SpawnScreen()) {
+		SDL_LogCritical(0, "Failed to create SDL texture: %s", SDL_GetError());
+		exit(1);
+	}
+}
+
+void Engine_ToggleIntegerScale2x(void) {
+	ctx.integerScale2x ^= 1;
+	SDL_Log("Integer 2x scaling: %s", ctx.integerScale2x ? "ON" : "OFF");
 	if(SpawnScreen()) {
 		SDL_LogCritical(0, "Failed to create SDL texture: %s", SDL_GetError());
 		exit(1);

@@ -1,5 +1,6 @@
 #include <SDL_render.h>
 #include <SDL_log.h>
+#include <stdlib.h>
 #ifdef USE_SDL_IMAGE
 #include <SDL_image.h>
 #endif
@@ -8,6 +9,13 @@
 #include "error.h"
 #include "camera.h"
 #include "map.h"
+
+struct sMapLayerData {
+	int width, height;
+	int shift;
+	int *color;
+	unsigned char *altitude;
+};
 
 static SDL_Surface *ReencodeSurface(SDL_Surface *old) {
 	if(old == NULL) return NULL;
@@ -29,6 +37,7 @@ static SDL_Surface *ScaleSurface(SDL_Surface *old, int side) {
 	SDL_Rect rct = {.w = side, .h = side};
 	if(SDL_BlitScaled(old, NULL, new, &rct) != 0) {
 		SDL_FreeSurface(new);
+		SDL_FreeSurface(old);
 		return NULL;
 	}
 
@@ -36,9 +45,16 @@ static SDL_Surface *ScaleSurface(SDL_Surface *old, int side) {
 	return new;
 }
 
-int Map_Open(Map *map, const char *diffuse, const char *height) {
+static void FreeLayerData(struct sMapLayerData *layer) {
+	if(layer->altitude) SDL_free(layer->altitude);
+	if(layer->color) SDL_free(layer->color);
+	SDL_memset(layer, 0, sizeof(*layer));
+}
+
+static int LoadLayer(const char *diffuse, const char *height, struct sMapLayerData *out) {
 	SDL_Surface *sDiffuse = NULL, *sHeight = NULL;
-	map->redraw = 1;
+	int ret = ERROR_OK;
+	SDL_memset(out, 0, sizeof(*out));
 
 #ifndef USE_SDL_IMAGE
 	sDiffuse = ReencodeSurface(SDL_LoadBMP(diffuse));
@@ -48,46 +64,88 @@ int Map_Open(Map *map, const char *diffuse, const char *height) {
 	sHeight = ReencodeSurface(IMG_Load(height));
 #endif
 
-	if(sDiffuse == NULL || sHeight == NULL)
-		return ERROR_MAPLOAD_FILE;
+	if(sDiffuse == NULL || sHeight == NULL) {
+		ret = ERROR_MAPLOAD_FILE;
+		goto cleanup;
+	}
 
-	if((sDiffuse->w != sDiffuse->h) || (sHeight->w != sHeight->h))
-		return ERROR_MAPLOAD_IMGSIZE;
+	if((sDiffuse->w != sDiffuse->h) || (sHeight->w != sHeight->h)) {
+		ret = ERROR_MAPLOAD_IMGSIZE;
+		goto cleanup;
+	}
 
-	if((sHeight->w & (sHeight->w - 1)) != 0)
-		return ERROR_MAPLOAD_WIDTHINVALID;
+	if((sHeight->w & (sHeight->w - 1)) != 0) {
+		ret = ERROR_MAPLOAD_WIDTHINVALID;
+		goto cleanup;
+	}
 
 	if(sHeight->w < sDiffuse->w) {
-		if((sHeight = ScaleSurface(sHeight, sDiffuse->w)) == NULL)
-			return ERROR_MAPLOAD_SCALE;
-	} else if(sDiffuse->w < sHeight->w)
-		return ERROR_MAPLOAD_MAPSMISMATCH;
+		sHeight = ScaleSurface(sHeight, sDiffuse->w);
+		if(sHeight == NULL) {
+			ret = ERROR_MAPLOAD_SCALE;
+			goto cleanup;
+		}
+	} else if(sDiffuse->w < sHeight->w) {
+		ret = ERROR_MAPLOAD_MAPSMISMATCH;
+		goto cleanup;
+	}
 
-	map->width = sHeight->w;
-	map->height = sHeight->h;
-	map->shift = (int)(SDL_log10(sHeight->w) / SDL_log10(2));
-	map->color = SDL_calloc(4, sHeight->w * sHeight->h);
-	map->altitude = SDL_calloc(1, sHeight->w * sHeight->h);
-	if(!map->color || !map->altitude)
-		return ERROR_MALLOC_FAIL;
+	out->width = sHeight->w;
+	out->height = sHeight->h;
+	out->shift = (int)(SDL_log10(sHeight->w) / SDL_log10(2));
+	out->color = SDL_calloc(4, sHeight->w * sHeight->h);
+	out->altitude = SDL_calloc(1, sHeight->w * sHeight->h);
+	if(!out->color || !out->altitude) {
+		ret = ERROR_MALLOC_FAIL;
+		goto cleanup;
+	}
 
 	const unsigned char *datah = sHeight->pixels;
 	unsigned int *datac = sDiffuse->pixels;
 	for(int i = 0; i < sHeight->w * sHeight->h; i++) {
-		map->color[i] = datac[i];
-		map->altitude[i] = datah[i << 2];
+		out->color[i] = datac[i];
+		out->altitude[i] = datah[i << 2];
 	}
 
-	/*
-		Высвобождаем память, выделенную
-		под два surface объекта, так как
-		они больше не нужны.
-	*/
-	SDL_FreeSurface(sDiffuse);
-	SDL_FreeSurface(sHeight);
+cleanup:
+	if(sDiffuse) SDL_FreeSurface(sDiffuse);
+	if(sHeight) SDL_FreeSurface(sHeight);
+	if(ret != ERROR_OK)
+		FreeLayerData(out);
+	return ret;
+}
 
+int Map_OpenDual(Map *map, const char *diffuse, const char *height, const char *ceilingDiffuse, const char *ceilingHeight) {
+	struct sMapLayerData floorLayer, ceilingLayer;
+	int ret;
+
+	if((ret = LoadLayer(diffuse, height, &floorLayer)) != ERROR_OK)
+		return ret;
+	if((ret = LoadLayer(ceilingDiffuse, ceilingHeight, &ceilingLayer)) != ERROR_OK) {
+		FreeLayerData(&floorLayer);
+		return ret;
+	}
+
+	Map_Close(map);
+	map->width = floorLayer.width;
+	map->height = floorLayer.height;
+	map->shift = floorLayer.shift;
+	map->color = floorLayer.color;
+	map->altitude = floorLayer.altitude;
 	map->ready = 1;
+
+	map->ceilingWidth = ceilingLayer.width;
+	map->ceilingHeight = ceilingLayer.height;
+	map->ceilingShift = ceilingLayer.shift;
+	map->ceilingColor = ceilingLayer.color;
+	map->ceilingAltitude = ceilingLayer.altitude;
+	map->ceilingReady = 1;
+	map->redraw = 1;
 	return ERROR_OK;
+}
+
+int Map_Open(Map *map, const char *diffuse, const char *height) {
+	return Map_OpenDual(map, diffuse, height, diffuse, height);
 }
 
 static inline void PrepareToDraw(SDL_Texture *screen, int **pixels, int *pitch, int *height) {
@@ -95,13 +153,13 @@ static inline void PrepareToDraw(SDL_Texture *screen, int **pixels, int *pitch, 
 	SDL_QueryTexture(screen, NULL, NULL, NULL, height);
 	*pitch /= sizeof(int);
 
-	// Заливаем экран одним цветом
+	// Fill screen with a single color
 	for(int i = 0; i < (*pitch) * (*height); i++)
 		(*pixels)[i] = 0x9090E0FF;
 }
 
 static inline void DrawVerticalLine(int *pixels, int pitch, int x, int top, int bottom, int color) {
-	// Линия за пределами окна? Низя такое.
+	// Clamp to screen bounds.
 	if(top < 0) top = 0;
 	if(top > bottom) return;
 
@@ -112,6 +170,10 @@ static inline void DrawVerticalLine(int *pixels, int pitch, int x, int top, int 
 	}
 }
 
+static inline int MapOffsetForPoint(float x, float y, int width, int height, int shift) {
+	return (((int)y & (width - 1)) << shift) + ((int)x & (height - 1));
+}
+
 static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start, int end) {
 	if(!map->ready) return;
 	float scale = cam->maxhorizon / 2.5f,
@@ -120,6 +182,7 @@ static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start,
 	deltaz = 1.0f;
 
 	for(float z = 1.0f; z < cam->distance; z += deltaz) {
+		int hasVisibleColumns = 0;
 		Point pLeft = {-cosang * z - sinang * z, sinang * z - cosang * z},
 		pRight = {cosang * z - sinang * z, -sinang * z - cosang * z},
 		pDelta = {
@@ -130,16 +193,42 @@ static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start,
 		pLeft.y += pDelta.y * start;
 		POINT_ADD(pLeft, cam->position);
 		for(int i = start; i < end; i++) {
-			int offset = (((int)pLeft.y & (map->width - 1)) << map->shift) + ((int)pLeft.x & (map->height - 1));
-			int top = (int)((cam->height - (float)map->altitude[offset]) / z * scale + cam->horizon);
-			DrawVerticalLine(pixels, pitch, i, top, map->hiddeny[i], map->color[offset]);
+			if(map->showny[i] >= map->hiddeny[i]) {
+				POINT_ADD(pLeft, pDelta);
+				continue;
+			}
+			hasVisibleColumns = 1;
+
+			if(map->ceilingReady) {
+				const int cOffset = MapOffsetForPoint(
+					pLeft.x, pLeft.y,
+					map->ceilingWidth, map->ceilingHeight, map->ceilingShift
+				);
+				const int cBottom = (int)(
+					(cam->height - (map->ceilingBase - (float)map->ceilingAltitude[cOffset]))
+					/ z * scale + cam->horizon
+				);
+				const int cTop = map->showny[i];
+				const int cDrawBottom = min(cBottom, map->hiddeny[i]);
+				DrawVerticalLine(pixels, pitch, i, cTop, cDrawBottom, map->ceilingColor[cOffset]);
+				if(cBottom > map->showny[i])
+					map->showny[i] = min(cBottom, map->hiddeny[i]);
+			}
+
+			const int offset = MapOffsetForPoint(pLeft.x, pLeft.y, map->width, map->height, map->shift);
+			const int floorTop = (int)((cam->height - (float)map->altitude[offset]) / z * scale + cam->horizon);
+			const int drawFloorTop = max(floorTop, map->showny[i]);
+			DrawVerticalLine(pixels, pitch, i, drawFloorTop, map->hiddeny[i], map->color[offset]);
 			/*
-				Слегка ускоряем рендер путём скрытия
-				накладываемых друг на друга частей линий
+				Slightly speed up rendering by hiding
+				overlapping line segments.
 			*/
-			if(top < map->hiddeny[i]) map->hiddeny[i] = (int)top;
+			if(floorTop < map->hiddeny[i])
+				map->hiddeny[i] = (int)floorTop;
 			POINT_ADD(pLeft, pDelta);
 		}
+		if(!hasVisibleColumns)
+			break;
 		deltaz += cam->zstep;
 		if(map->optimize && z > map->optdist)
 			deltaz += cam->zstep * (z / 2.0f);
@@ -151,8 +240,10 @@ void Map_Draw(Map *map, Camera *cam) {
 	if(!map->redraw) return;
 	int *pixels = NULL, pitch = 0, height = 0;
 	PrepareToDraw((SDL_Texture *)map->screen, &pixels, &pitch, &height);
-	for(int i = 0; i < pitch; i++)
+	for(int i = 0; i < pitch; i++) {
 		map->hiddeny[i] = height;
+		map->showny[i] = 0;
+	}
 	DrawFromTo(map, cam, pixels, pitch, 0, pitch);
 
 	SDL_UnlockTexture((SDL_Texture *)map->screen);
@@ -192,8 +283,10 @@ void Map_Draw(Map *map, Camera *cam) {
 		map->rgctx.cam = cam;
 		map->rgctx.pixels = pixels;
 		map->rgctx.pitch = pitch;
-		for(int i = 0; i < pitch; i++)
+		for(int i = 0; i < pitch; i++) {
 			map->hiddeny[i] = height;
+			map->showny[i] = 0;
+		}
 		SDL_CondBroadcast(map->rgctx.unlockcond);
 		for(int i = 0; i < map->rctxcnt && !failed; i++)
 			failed = SDL_SemWaitTimeout(map->rctxs[i].semaphore, 600) != 0;
@@ -208,36 +301,62 @@ void Map_Draw(Map *map, Camera *cam) {
 }
 
 static void DestroyThreads(Map *map) {
-	if(!map->rctxs) return;
-	map->rgctx.endwork = 1;
-	SDL_CondBroadcast(map->rgctx.unlockcond);
-	for(int i = 0; i < map->rctxcnt; i++) {
-		SDL_sem *sem = map->rctxs[i].semaphore;
-		SDL_SemWait(sem);
-		SDL_DestroySemaphore(sem);
-	}
+	if(map->rctxs) {
+		map->rgctx.endwork = 1;
+		SDL_CondBroadcast(map->rgctx.unlockcond);
+		for(int i = 0; i < map->rctxcnt; i++) {
+			SDL_sem *sem = map->rctxs[i].semaphore;
+			SDL_SemWait(sem);
+			SDL_DestroySemaphore(sem);
+		}
 
-	SDL_free(map->hiddeny);
-	SDL_free(map->rctxs);
-	map->rctxs = NULL;
+		SDL_free(map->rctxs);
+		map->rctxs = NULL;
+	}
+	if(map->rgctx.unlockcond) {
+		SDL_DestroyCond(map->rgctx.unlockcond);
+		map->rgctx.unlockcond = NULL;
+	}
+	if(map->hiddeny) {
+		SDL_free(map->hiddeny);
+		map->hiddeny = NULL;
+	}
+	if(map->showny) {
+		SDL_free(map->showny);
+		map->showny = NULL;
+	}
 }
 #endif
 
 void Map_SetScreen(Map *map, void *screen) {
-	map->screen = screen;
 #ifdef USE_THREADED_RENDER
 	DestroyThreads(map);
+#else
+	if(map->hiddeny) {
+		SDL_free(map->hiddeny);
+		map->hiddeny = NULL;
+	}
+	if(map->showny) {
+		SDL_free(map->showny);
+		map->showny = NULL;
+	}
 #endif
+	map->screen = screen;
 	if(!screen) return;
 	int width = 0;
 	if(SDL_QueryTexture(screen, NULL, NULL, &width, NULL) == 0) {
 		map->hiddeny = SDL_calloc(4, width);
+		map->showny = SDL_calloc(4, width);
 		map->redraw = 1;
+		if(!map->hiddeny || !map->showny) {
+			SDL_LogCritical(0, "Failed to allocate screen line buffers");
+			exit(1);
+		}
 #ifdef USE_THREADED_RENDER
 		map->rgctx.self = map;
 		map->rgctx.endwork = 0;
 		map->rgctx.unlockcond = SDL_CreateCond();
-		// Если это значение не было установлено извне, то ставим его самостоятельно
+		// If this value was not set externally, pick a default.
 		if(!map->rctxcnt) map->rctxcnt = max(SDL_GetCPUCount() - 1, 1);
 		map->rctxs = SDL_calloc(map->rctxcnt, sizeof(struct sMapRenderCtx));
 
@@ -266,6 +385,21 @@ void Map_Close(Map *map) {
 		SDL_free(map->color);
 		map->color = NULL;
 	}
+	if(map->ceilingAltitude) {
+		SDL_free(map->ceilingAltitude);
+		map->ceilingAltitude = NULL;
+	}
+	if(map->ceilingColor) {
+		SDL_free(map->ceilingColor);
+		map->ceilingColor = NULL;
+	}
 
 	map->ready = 0;
+	map->ceilingReady = 0;
+	map->width = 0;
+	map->height = 0;
+	map->shift = 0;
+	map->ceilingWidth = 0;
+	map->ceilingHeight = 0;
+	map->ceilingShift = 0;
 }

@@ -5,8 +5,8 @@
 #include <emscripten.h>
 #else
 /*
-	На данный момент drag'n'drop в emscripten не поддерживается,
-	соответственно и подключать его нет особой нужды.
+	Drag and drop is currently not supported in emscripten,
+	so there is no need to include it there.
 */
 #include "modules/dragndrop.h"
 #endif
@@ -33,11 +33,13 @@ static void RemoveController(void *ptr) {
 
 int main(int argc, char *argv[]) {
 	EngineSettings es = {
-		.vsync = 1,
+		.vsync = 0,
 		.width = GRAPHICS_WIDTH,
 		.height = GRAPHICS_HEIGHT,
 		.diffusemap = "maps/C1W.bmp",
 		.heightmap = "maps/D1.bmp",
+		.ceilingdiffusemap = "maps/C1W.bmp",
+		.ceilingheightmap = "maps/D1.bmp",
 	};
 
 	if(CommandArgs_Parse(argc, argv, &es))

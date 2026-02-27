@@ -1,6 +1,6 @@
 #ifndef VSENGINE_H
 #define VSENGINE_H
-// Говорим SDL, что не нужно переписывать main
+// Tell SDL not to redefine main
 #define SDL_MAIN_HANDLED
 typedef struct sPoint {
 	float x, y;
@@ -12,21 +12,22 @@ typedef struct sPoint {
 typedef struct sEngineSettings {
 	int vsync, width, height;
 	char *diffusemap, *heightmap;
+	char *ceilingdiffusemap, *ceilingheightmap;
 #ifdef USE_THREADED_RENDER
 	int numthreads;
 #endif
 } EngineSettings;
 
 typedef enum eListeners {
-	LISTEN_ENGINE_START, // Вызвать при запуске движка
-	LISTEN_ENGINE_UPDATE, // Вызывать каждый тик
-	LISTEN_ENGINE_DRAW, // Вызывать перед отправкой данных рендереру
-	LISTEN_ENGINE_STOP, // Вызвать при остановке движка
-	LISTEN_CONTROLLER_FAIL, // Вызвать при ошибке чтения геймпада
-	LISTEN_CONTROLLER_ADD, // Вызвать при подключении геймпада к компьютеру
-	LISTEN_CONTROLLER_DEL, // Вызвать при отключении геймпада от компьютера
-	LISTEN_SDL_WINDOW, // Вызвать при создании SDL окна
-	LISTEN_SDL_EVENT, // Вызывать при получении события от SDL
+	LISTEN_ENGINE_START, // Called when engine starts
+	LISTEN_ENGINE_UPDATE, // Called every tick
+	LISTEN_ENGINE_DRAW, // Called before presenting to the renderer
+	LISTEN_ENGINE_STOP, // Called when engine stops
+	LISTEN_CONTROLLER_FAIL, // Called when controller init fails
+	LISTEN_CONTROLLER_ADD, // Called when a controller is connected
+	LISTEN_CONTROLLER_DEL, // Called when a controller is disconnected
+	LISTEN_SDL_WINDOW, // Called when the SDL window is created
+	LISTEN_SDL_EVENT, // Called when an SDL event is received
 	LISTEN_TYPES_MAX
 } Listeners;
 
@@ -37,6 +38,7 @@ void Engine_Stop(void);
 void Engine_End(void);
 
 void Engine_ToggleFullscreen(void);
+void Engine_ToggleIntegerScale2x(void);
 void *Engine_GetWindow(void);
 void Engine_GetObjects(Camera **cam, Map **map);
 float Engine_GetDeltaTime(void);

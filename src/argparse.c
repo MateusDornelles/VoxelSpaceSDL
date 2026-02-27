@@ -14,7 +14,7 @@ static int TestArg(char *arg, char *test, char *alias) {
 	SDL_strcasecmp(arg, alias) == 0;
 }
 
-// TODO: Доделать когда-нибудь
+// TODO: Finish this eventually
 static char *HelpLines[] = {
 	"",
 	NULL
@@ -45,6 +45,10 @@ int CommandArgs_Parse(int argc, char *argv[], EngineSettings *es) {
 			es->diffusemap = argv[cursor++];
 		} else if(TestArg(argstr, "height", "hm")) {
 			es->heightmap = argv[cursor++];
+		} else if(TestArg(argstr, "ceildiffuse", "cdm")) {
+			es->ceilingdiffusemap = argv[cursor++];
+		} else if(TestArg(argstr, "ceilheight", "chm")) {
+			es->ceilingheightmap = argv[cursor++];
 		} else if(TestArg(argstr, "novsync", "nv")) {
 			es->vsync = 0;
 		} else if(TestArg(argstr, "winwidth", "ww")) {

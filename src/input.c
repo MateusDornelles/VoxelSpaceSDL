@@ -18,7 +18,7 @@ void Input_Update(void *ptr) {
 	Camera *cam = NULL;
 	Engine_GetObjects(&cam, &map);
 
-	// Запрашиваем перерисовку мир, если была нажата какая-либо кнопка
+	// Request a world redraw if any control key was pressed
 	if(PollControllers(cam, delta * 0.03f) || ProcessKeyboard(cam, delta * 0.03f))
 		map->redraw = 1;
 
@@ -41,9 +41,9 @@ void Input_Update(void *ptr) {
 		}
 	} else minHeight += 2.0f;
 
-	// Вытаскиваем камеру из-под земли, если она там
+	// Pull the camera above terrain if it went below ground
 	cam->height = max(minHeight, min(cam->height, CAMERA_HEIGHT_MAX));
-	// Обнуляем угл камеры, если она прошла полный круг
+	// Reset camera angle after a full turn
 	if(SDL_fabsf(cam->angle) > M_PI * 2) cam->angle = 0;
 }
 

@@ -34,6 +34,56 @@
 				"kind": "build",
 				"isDefault": true
 			}
+		},
+		{
+			"type": "shell",
+			"label": "Configure CMake",
+			"command": "cmake",
+			"args": [
+				"-S", ".", "-B", "build",
+				"-DCMAKE_BUILD_TYPE=Release",
+				"-DVOXEL_USE_THREADED_RENDER=OFF"
+			],
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "Build VoxelSpace (CMake)",
+			"command": "cmake",
+			"args": ["--build", "build", "--config", "Release", "-j"],
+			"dependsOn": "Configure CMake",
+			"problemMatcher": [
+				"$gcc"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "Run VoxelSpace",
+			"linux": {
+				"command": "./out/vs"
+			},
+			"windows": {
+				"command": ".\\out\\vs.exe"
+			},
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"label": "Build and Run VoxelSpace",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Build VoxelSpace (CMake)",
+				"Run VoxelSpace"
+			],
+			"problemMatcher": []
 		}
 	]
 }

@@ -4,13 +4,13 @@
 #include "defines.h"
 
 typedef struct sCamera {
-	Point position; // Текущая позиция камеры
-	float height; // Высота камеры над картой
-	float distance; // Дальность прорисовки
-	float maxhorizon; // Максимальный уровень горизонта
-	float horizon; // Уровень горизонта
-	float angle; // Угол поворота камеры
-	float zstep; // Шаг по оси Z
+	Point position; // Current camera position
+	float height; // Camera height above the map
+	float distance; // Render distance
+	float maxhorizon; // Maximum horizon level
+	float horizon; // Horizon level
+	float angle; // Camera angle
+	float zstep; // Z-axis step
 } Camera;
 
 static inline void Camera_AdjustDistance(Camera *cam, float value) {
@@ -41,7 +41,7 @@ static inline void Camera_StrafeVert(Camera *cam, float spd) {
 
 static inline void Camera_Pitch(Camera *cam, float spd) {
 	cam->horizon -= spd * cam->maxhorizon * CAMERA_HORIZON_STEP;
-	// Ограничиваем горизонт камеры размерностью окна
+	// Clamp the camera horizon to window dimensions
 	cam->horizon = max(-cam->maxhorizon, min(cam->horizon, cam->maxhorizon));
 }
 
