@@ -36,7 +36,7 @@
 #define CAMERA_DISTANCE_DEFAULT 3000.0f // Default render distance
 #define CAMERA_DISTANCE_MIN 300.0f // Minimum render distance
 #define CAMERA_DISTANCE_MAX 30000.0f // Maximum render distance
-#define CAMERA_DISTANCE_STEP 150.0f // Render distance adjustment step
+#define CAMERA_DISTANCE_STEP 75.0f // Render distance adjustment step
 #define CAMERA_POSITION_DEFAULT POINT_MAKE(512.0f, 800.0f) // Default camera position
 #define CAMERA_ZSTEP_DEFAULT 0.002f // Default Z-axis step
 #define CAMERA_ZSTEP_MIN 0.001f // Minimum Z-axis step

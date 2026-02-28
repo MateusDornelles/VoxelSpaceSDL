@@ -140,6 +140,7 @@ int Map_OpenDual(Map *map, const char *diffuse, const char *height, const char *
 	map->ceilingColor = ceilingLayer.color;
 	map->ceilingAltitude = ceilingLayer.altitude;
 	map->ceilingReady = 1;
+	map->ceilingEnabled = 1;
 	map->redraw = 1;
 	return ERROR_OK;
 }
@@ -176,12 +177,17 @@ static inline int MapOffsetForPoint(float x, float y, int width, int height, int
 
 static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start, int end) {
 	if(!map->ready) return;
-	float scale = cam->maxhorizon / 2.5f,
-	sinang = SDL_sinf(cam->angle),
-	cosang = SDL_cosf(cam->angle),
-	deltaz = 1.0f;
+	const int drawCeiling = map->ceilingReady && map->ceilingEnabled;
+	const float scale = cam->maxhorizon / 2.5f;
+	const float sinang = SDL_sinf(cam->angle);
+	const float cosang = SDL_cosf(cam->angle);
+	const float camHeight = cam->height;
+	const float camHorizon = cam->horizon;
+	const float ceilingBase = map->ceilingBase;
+	float deltaz = 1.0f;
 
 	for(float z = 1.0f; z < cam->distance; z += deltaz) {
+		const float invz = scale / z;
 		int hasVisibleColumns = 0;
 		Point pLeft = {-cosang * z - sinang * z, sinang * z - cosang * z},
 		pRight = {cosang * z - sinang * z, -sinang * z - cosang * z},
@@ -193,20 +199,25 @@ static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start,
 		pLeft.y += pDelta.y * start;
 		POINT_ADD(pLeft, cam->position);
 		for(int i = start; i < end; i++) {
-			if(map->showny[i] >= map->hiddeny[i]) {
+			if(drawCeiling) {
+				if(map->showny[i] >= map->hiddeny[i]) {
+					POINT_ADD(pLeft, pDelta);
+					continue;
+				}
+			} else if(map->hiddeny[i] <= 0) {
 				POINT_ADD(pLeft, pDelta);
 				continue;
 			}
 			hasVisibleColumns = 1;
 
-			if(map->ceilingReady) {
+			if(drawCeiling) {
 				const int cOffset = MapOffsetForPoint(
 					pLeft.x, pLeft.y,
 					map->ceilingWidth, map->ceilingHeight, map->ceilingShift
 				);
 				const int cBottom = (int)(
-					(cam->height - (map->ceilingBase - (float)map->ceilingAltitude[cOffset]))
-					/ z * scale + cam->horizon
+					(camHeight - (ceilingBase - (float)map->ceilingAltitude[cOffset]))
+					* invz + camHorizon
 				);
 				const int cTop = map->showny[i];
 				const int cDrawBottom = min(cBottom, map->hiddeny[i]);
@@ -216,8 +227,8 @@ static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start,
 			}
 
 			const int offset = MapOffsetForPoint(pLeft.x, pLeft.y, map->width, map->height, map->shift);
-			const int floorTop = (int)((cam->height - (float)map->altitude[offset]) / z * scale + cam->horizon);
-			const int drawFloorTop = max(floorTop, map->showny[i]);
+			const int floorTop = (int)((camHeight - (float)map->altitude[offset]) * invz + camHorizon);
+			const int drawFloorTop = drawCeiling ? max(floorTop, map->showny[i]) : floorTop;
 			DrawVerticalLine(pixels, pitch, i, drawFloorTop, map->hiddeny[i], map->color[offset]);
 			/*
 				Slightly speed up rendering by hiding
@@ -396,6 +407,7 @@ void Map_Close(Map *map) {
 
 	map->ready = 0;
 	map->ceilingReady = 0;
+	map->ceilingEnabled = 0;
 	map->width = 0;
 	map->height = 0;
 	map->shift = 0;

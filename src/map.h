@@ -8,6 +8,7 @@
 typedef struct sMap {
 	int ready; // Whether the floor map was loaded successfully
 	int ceilingReady; // Whether the ceiling map was loaded successfully
+	int ceilingEnabled; // Whether ceiling rendering is enabled
 	int redraw; // Whether the map needs to be redrawn
 	int width, height; // Floor map dimensions
 	int shift; // Bit shift for floor map width
