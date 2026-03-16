@@ -1,6 +1,9 @@
 #include <SDL_render.h>
 #include <SDL_log.h>
 #include <stdlib.h>
+#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
+#include <xmmintrin.h>
+#endif
 #ifdef USE_SDL_IMAGE
 #include <SDL_image.h>
 #endif
@@ -13,9 +16,28 @@
 struct sMapLayerData {
 	int width, height;
 	int shift;
+	int tileShift;
+	int tileMask;
+	int tilesShift;
+	int tileAreaShift;
 	int *color;
 	unsigned char *altitude;
 };
+
+#define MAP_STORAGE_TILE_SIDE 32
+#ifndef MAP_PREFETCH_AHEAD
+#define MAP_PREFETCH_AHEAD 16
+#endif
+
+static inline void PrefetchRead(const void *ptr) {
+#if defined(__GNUC__) || defined(__clang__)
+	__builtin_prefetch(ptr, 0, 1);
+#elif defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
+	_mm_prefetch((const char *)ptr, _MM_HINT_T0);
+#else
+	(void)ptr;
+#endif
+}
 
 static SDL_Surface *ReencodeSurface(SDL_Surface *old) {
 	if(old == NULL) return NULL;
@@ -49,6 +71,26 @@ static void FreeLayerData(struct sMapLayerData *layer) {
 	if(layer->altitude) SDL_free(layer->altitude);
 	if(layer->color) SDL_free(layer->color);
 	SDL_memset(layer, 0, sizeof(*layer));
+}
+
+static inline int Log2Pow2(unsigned int value) {
+	int shift = 0;
+	while(value > 1) {
+		value >>= 1;
+		shift++;
+	}
+	return shift;
+}
+
+static inline int TiledOffsetForCoord(
+	int x, int y,
+	int tileMask, int tileShift, int tilesShift, int tileAreaShift
+) {
+	const int tilex = x >> tileShift;
+	const int tiley = y >> tileShift;
+	const int tileIndex = (tiley << tilesShift) + tilex;
+	const int inTileOffset = ((y & tileMask) << tileShift) + (x & tileMask);
+	return (tileIndex << tileAreaShift) + inTileOffset;
 }
 
 static int LoadLayer(const char *diffuse, const char *height, struct sMapLayerData *out) {
@@ -92,7 +134,12 @@ static int LoadLayer(const char *diffuse, const char *height, struct sMapLayerDa
 
 	out->width = sHeight->w;
 	out->height = sHeight->h;
-	out->shift = (int)(SDL_log10(sHeight->w) / SDL_log10(2));
+	out->shift = Log2Pow2((unsigned int)sHeight->w);
+	const int tileSide = min(MAP_STORAGE_TILE_SIDE, sHeight->w);
+	out->tileShift = Log2Pow2((unsigned int)tileSide);
+	out->tileMask = tileSide - 1;
+	out->tilesShift = out->shift - out->tileShift;
+	out->tileAreaShift = out->tileShift << 1;
 	out->color = SDL_calloc(4, sHeight->w * sHeight->h);
 	out->altitude = SDL_calloc(1, sHeight->w * sHeight->h);
 	if(!out->color || !out->altitude) {
@@ -102,9 +149,16 @@ static int LoadLayer(const char *diffuse, const char *height, struct sMapLayerDa
 
 	const unsigned char *datah = sHeight->pixels;
 	unsigned int *datac = sDiffuse->pixels;
-	for(int i = 0; i < sHeight->w * sHeight->h; i++) {
-		out->color[i] = datac[i];
-		out->altitude[i] = datah[i << 2];
+	for(int y = 0; y < sHeight->h; y++) {
+		for(int x = 0; x < sHeight->w; x++) {
+			const int srcOffset = (y * sHeight->w) + x;
+			const int dstOffset = TiledOffsetForCoord(
+				x, y,
+				out->tileMask, out->tileShift, out->tilesShift, out->tileAreaShift
+			);
+			out->color[dstOffset] = datac[srcOffset];
+			out->altitude[dstOffset] = datah[srcOffset << 2];
+		}
 	}
 
 cleanup:
@@ -130,6 +184,10 @@ int Map_OpenDual(Map *map, const char *diffuse, const char *height, const char *
 	map->width = floorLayer.width;
 	map->height = floorLayer.height;
 	map->shift = floorLayer.shift;
+	map->tileShift = floorLayer.tileShift;
+	map->tileMask = floorLayer.tileMask;
+	map->tilesShift = floorLayer.tilesShift;
+	map->tileAreaShift = floorLayer.tileAreaShift;
 	map->color = floorLayer.color;
 	map->altitude = floorLayer.altitude;
 	map->ready = 1;
@@ -137,6 +195,10 @@ int Map_OpenDual(Map *map, const char *diffuse, const char *height, const char *
 	map->ceilingWidth = ceilingLayer.width;
 	map->ceilingHeight = ceilingLayer.height;
 	map->ceilingShift = ceilingLayer.shift;
+	map->ceilingTileShift = ceilingLayer.tileShift;
+	map->ceilingTileMask = ceilingLayer.tileMask;
+	map->ceilingTilesShift = ceilingLayer.tilesShift;
+	map->ceilingTileAreaShift = ceilingLayer.tileAreaShift;
 	map->ceilingColor = ceilingLayer.color;
 	map->ceilingAltitude = ceilingLayer.altitude;
 	map->ceilingReady = 1;
@@ -171,8 +233,18 @@ static inline void DrawVerticalLine(int *pixels, int pitch, int x, int top, int 
 	}
 }
 
-static inline int MapOffsetForPoint(float x, float y, int width, int height, int shift) {
-	return (((int)y & (width - 1)) << shift) + ((int)x & (height - 1));
+static inline int MapOffsetForPoint(
+	float x, float y,
+	int width, int height,
+	int tileMask, int tileShift, int tilesShift, int tileAreaShift
+) {
+	const int mapx = ((int)x & (width - 1));
+	const int mapy = ((int)y & (height - 1));
+	const int tilex = mapx >> tileShift;
+	const int tiley = mapy >> tileShift;
+	const int tileIndex = (tiley << tilesShift) + tilex;
+	const int inTileOffset = ((mapy & tileMask) << tileShift) + (mapx & tileMask);
+	return (tileIndex << tileAreaShift) + inTileOffset;
 }
 
 static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start, int end) {
@@ -198,13 +270,42 @@ static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start,
 		pLeft.x += pDelta.x * start;
 		pLeft.y += pDelta.y * start;
 		POINT_ADD(pLeft, cam->position);
+		Point pAhead = pLeft;
+		const int canPrefetch = MAP_PREFETCH_AHEAD > 0 && MAP_PREFETCH_AHEAD < (end - start);
+		if(canPrefetch) {
+			pAhead.x += pDelta.x * MAP_PREFETCH_AHEAD;
+			pAhead.y += pDelta.y * MAP_PREFETCH_AHEAD;
+		}
 		for(int i = start; i < end; i++) {
+			if(canPrefetch) {
+				const int aheadOffset = MapOffsetForPoint(
+					pAhead.x, pAhead.y,
+					map->width, map->height,
+					map->tileMask, map->tileShift, map->tilesShift, map->tileAreaShift
+				);
+				PrefetchRead(&map->altitude[aheadOffset]);
+				PrefetchRead(&map->color[aheadOffset]);
+				if(drawCeiling) {
+					const int cAheadOffset = MapOffsetForPoint(
+						pAhead.x, pAhead.y,
+						map->ceilingWidth, map->ceilingHeight,
+						map->ceilingTileMask, map->ceilingTileShift,
+						map->ceilingTilesShift, map->ceilingTileAreaShift
+					);
+					PrefetchRead(&map->ceilingAltitude[cAheadOffset]);
+					PrefetchRead(&map->ceilingColor[cAheadOffset]);
+				}
+			}
 			if(drawCeiling) {
 				if(map->showny[i] >= map->hiddeny[i]) {
+					if(canPrefetch)
+						POINT_ADD(pAhead, pDelta);
 					POINT_ADD(pLeft, pDelta);
 					continue;
 				}
 			} else if(map->hiddeny[i] <= 0) {
+				if(canPrefetch)
+					POINT_ADD(pAhead, pDelta);
 				POINT_ADD(pLeft, pDelta);
 				continue;
 			}
@@ -213,7 +314,9 @@ static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start,
 			if(drawCeiling) {
 				const int cOffset = MapOffsetForPoint(
 					pLeft.x, pLeft.y,
-					map->ceilingWidth, map->ceilingHeight, map->ceilingShift
+					map->ceilingWidth, map->ceilingHeight,
+					map->ceilingTileMask, map->ceilingTileShift,
+					map->ceilingTilesShift, map->ceilingTileAreaShift
 				);
 				const int cBottom = (int)(
 					(camHeight - (ceilingBase - (float)map->ceilingAltitude[cOffset]))
@@ -226,7 +329,11 @@ static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start,
 					map->showny[i] = min(cBottom, map->hiddeny[i]);
 			}
 
-			const int offset = MapOffsetForPoint(pLeft.x, pLeft.y, map->width, map->height, map->shift);
+			const int offset = MapOffsetForPoint(
+				pLeft.x, pLeft.y,
+				map->width, map->height,
+				map->tileMask, map->tileShift, map->tilesShift, map->tileAreaShift
+			);
 			const int floorTop = (int)((camHeight - (float)map->altitude[offset]) * invz + camHorizon);
 			const int drawFloorTop = drawCeiling ? max(floorTop, map->showny[i]) : floorTop;
 			DrawVerticalLine(pixels, pitch, i, drawFloorTop, map->hiddeny[i], map->color[offset]);
@@ -236,6 +343,8 @@ static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start,
 			*/
 			if(floorTop < map->hiddeny[i])
 				map->hiddeny[i] = (int)floorTop;
+			if(canPrefetch)
+				POINT_ADD(pAhead, pDelta);
 			POINT_ADD(pLeft, pDelta);
 		}
 		if(!hasVisibleColumns)
@@ -411,7 +520,15 @@ void Map_Close(Map *map) {
 	map->width = 0;
 	map->height = 0;
 	map->shift = 0;
+	map->tileShift = 0;
+	map->tileMask = 0;
+	map->tilesShift = 0;
+	map->tileAreaShift = 0;
 	map->ceilingWidth = 0;
 	map->ceilingHeight = 0;
 	map->ceilingShift = 0;
+	map->ceilingTileShift = 0;
+	map->ceilingTileMask = 0;
+	map->ceilingTilesShift = 0;
+	map->ceilingTileAreaShift = 0;
 }

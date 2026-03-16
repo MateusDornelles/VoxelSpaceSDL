@@ -19,6 +19,13 @@ struct sContext {
 		Uint32 sampleFrames;
 		float value;
 	} fps;
+	struct {
+		int enabled;
+		int logfps;
+		float duration;
+		Uint64 start;
+		Uint64 frames;
+	} bench;
 	SDL_Window *wnd;
 	SDL_Renderer *render;
 	SDL_Texture *screen;
@@ -194,6 +201,13 @@ static int SpawnScreen(void) {
 int Engine_Start(EngineSettings *es) {
 	SDL_SetMainReady();
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+	const char *benchSeconds = SDL_getenv("VOXEL_BENCH_SECONDS");
+	const char *benchLog = SDL_getenv("VOXEL_BENCH_LOG");
+	ctx.bench.enabled = benchSeconds && SDL_atof(benchSeconds) > 0.0f;
+	ctx.bench.logfps = benchLog && SDL_atoi(benchLog) > 0;
+	ctx.bench.duration = ctx.bench.enabled ? SDL_atof(benchSeconds) : 0.0f;
+	ctx.bench.start = 0;
+	ctx.bench.frames = 0;
 	// Initialize SDL
 	if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
 		if(SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -276,6 +290,7 @@ int Engine_Start(EngineSettings *es) {
 	ctx.fps.sampleStart = SDL_GetPerformanceCounter();
 	ctx.fps.sampleFrames = 0;
 	ctx.fps.value = 0.0f;
+	ctx.bench.start = ctx.fps.sampleStart;
 
 	Engine_CallListeners(LISTEN_ENGINE_START, NULL);
 	return 0;
@@ -320,6 +335,10 @@ int Engine_Update(void) {
 	// Run all listeners waiting for UPDATE
 	Engine_CallListeners(LISTEN_ENGINE_UPDATE, &ctx.deltaTime);
 
+	// Keep terrain rendering active in benchmark mode.
+	if(ctx.bench.enabled)
+		ctx.map.redraw = 1;
+
 	// Redraw the world
 	Map_Draw(&ctx.map, &ctx.camera);
 
@@ -343,13 +362,27 @@ int Engine_Update(void) {
 	SDL_RenderPresent(ctx.render);
 
 	ctx.fps.sampleFrames++;
+	ctx.bench.frames++;
 	if(ctx.fps.sampleStart > 0) {
 		const Uint64 now = SDL_GetPerformanceCounter();
 		const double elapsed = (double)(now - ctx.fps.sampleStart) / SDL_GetPerformanceFrequency();
 		if(elapsed >= 0.25) {
 			ctx.fps.value = (float)(ctx.fps.sampleFrames / elapsed);
+			if(ctx.bench.logfps)
+				SDL_Log("BENCH_FPS instant=%.2f", ctx.fps.value);
 			ctx.fps.sampleFrames = 0;
 			ctx.fps.sampleStart = now;
+		}
+	}
+	if(ctx.bench.enabled && ctx.bench.start > 0) {
+		const Uint64 now = SDL_GetPerformanceCounter();
+		const double elapsed = (double)(now - ctx.bench.start) / SDL_GetPerformanceFrequency();
+		if(elapsed >= ctx.bench.duration) {
+			const double avg = elapsed > 0.0 ? ((double)ctx.bench.frames / elapsed) : 0.0;
+			SDL_Log("BENCH_RESULT seconds=%.2f frames=%llu fps=%.2f",
+				elapsed, (unsigned long long)ctx.bench.frames, (float)avg
+			);
+			return 0;
 		}
 	}
 
