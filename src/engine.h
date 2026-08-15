@@ -11,6 +11,7 @@ typedef struct sPoint {
 
 typedef struct sEngineSettings {
 	int vsync, width, height;
+	int benchmarkSeconds;
 	char *diffusemap, *heightmap;
 	char *ceilingdiffusemap, *ceilingheightmap;
 #ifdef USE_THREADED_RENDER

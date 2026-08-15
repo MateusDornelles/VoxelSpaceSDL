@@ -1,8 +1,9 @@
 #include <SDL_render.h>
 #include <SDL_log.h>
 #include <stdlib.h>
-#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
-#include <xmmintrin.h>
+#ifdef USE_AVX2
+#include <immintrin.h>
+#include <SDL_cpuinfo.h>
 #endif
 #ifdef USE_SDL_IMAGE
 #include <SDL_image.h>
@@ -16,28 +17,9 @@
 struct sMapLayerData {
 	int width, height;
 	int shift;
-	int tileShift;
-	int tileMask;
-	int tilesShift;
-	int tileAreaShift;
 	int *color;
 	unsigned char *altitude;
 };
-
-#define MAP_STORAGE_TILE_SIDE 32
-#ifndef MAP_PREFETCH_AHEAD
-#define MAP_PREFETCH_AHEAD 16
-#endif
-
-static inline void PrefetchRead(const void *ptr) {
-#if defined(__GNUC__) || defined(__clang__)
-	__builtin_prefetch(ptr, 0, 1);
-#elif defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
-	_mm_prefetch((const char *)ptr, _MM_HINT_T0);
-#else
-	(void)ptr;
-#endif
-}
 
 static SDL_Surface *ReencodeSurface(SDL_Surface *old) {
 	if(old == NULL) return NULL;
@@ -71,26 +53,6 @@ static void FreeLayerData(struct sMapLayerData *layer) {
 	if(layer->altitude) SDL_free(layer->altitude);
 	if(layer->color) SDL_free(layer->color);
 	SDL_memset(layer, 0, sizeof(*layer));
-}
-
-static inline int Log2Pow2(unsigned int value) {
-	int shift = 0;
-	while(value > 1) {
-		value >>= 1;
-		shift++;
-	}
-	return shift;
-}
-
-static inline int TiledOffsetForCoord(
-	int x, int y,
-	int tileMask, int tileShift, int tilesShift, int tileAreaShift
-) {
-	const int tilex = x >> tileShift;
-	const int tiley = y >> tileShift;
-	const int tileIndex = (tiley << tilesShift) + tilex;
-	const int inTileOffset = ((y & tileMask) << tileShift) + (x & tileMask);
-	return (tileIndex << tileAreaShift) + inTileOffset;
 }
 
 static int LoadLayer(const char *diffuse, const char *height, struct sMapLayerData *out) {
@@ -134,12 +96,7 @@ static int LoadLayer(const char *diffuse, const char *height, struct sMapLayerDa
 
 	out->width = sHeight->w;
 	out->height = sHeight->h;
-	out->shift = Log2Pow2((unsigned int)sHeight->w);
-	const int tileSide = min(MAP_STORAGE_TILE_SIDE, sHeight->w);
-	out->tileShift = Log2Pow2((unsigned int)tileSide);
-	out->tileMask = tileSide - 1;
-	out->tilesShift = out->shift - out->tileShift;
-	out->tileAreaShift = out->tileShift << 1;
+	out->shift = (int)(SDL_log10(sHeight->w) / SDL_log10(2));
 	out->color = SDL_calloc(4, sHeight->w * sHeight->h);
 	out->altitude = SDL_calloc(1, sHeight->w * sHeight->h);
 	if(!out->color || !out->altitude) {
@@ -149,16 +106,9 @@ static int LoadLayer(const char *diffuse, const char *height, struct sMapLayerDa
 
 	const unsigned char *datah = sHeight->pixels;
 	unsigned int *datac = sDiffuse->pixels;
-	for(int y = 0; y < sHeight->h; y++) {
-		for(int x = 0; x < sHeight->w; x++) {
-			const int srcOffset = (y * sHeight->w) + x;
-			const int dstOffset = TiledOffsetForCoord(
-				x, y,
-				out->tileMask, out->tileShift, out->tilesShift, out->tileAreaShift
-			);
-			out->color[dstOffset] = datac[srcOffset];
-			out->altitude[dstOffset] = datah[srcOffset << 2];
-		}
+	for(int i = 0; i < sHeight->w * sHeight->h; i++) {
+		out->color[i] = datac[i];
+		out->altitude[i] = datah[i << 2];
 	}
 
 cleanup:
@@ -184,10 +134,6 @@ int Map_OpenDual(Map *map, const char *diffuse, const char *height, const char *
 	map->width = floorLayer.width;
 	map->height = floorLayer.height;
 	map->shift = floorLayer.shift;
-	map->tileShift = floorLayer.tileShift;
-	map->tileMask = floorLayer.tileMask;
-	map->tilesShift = floorLayer.tilesShift;
-	map->tileAreaShift = floorLayer.tileAreaShift;
 	map->color = floorLayer.color;
 	map->altitude = floorLayer.altitude;
 	map->ready = 1;
@@ -195,10 +141,6 @@ int Map_OpenDual(Map *map, const char *diffuse, const char *height, const char *
 	map->ceilingWidth = ceilingLayer.width;
 	map->ceilingHeight = ceilingLayer.height;
 	map->ceilingShift = ceilingLayer.shift;
-	map->ceilingTileShift = ceilingLayer.tileShift;
-	map->ceilingTileMask = ceilingLayer.tileMask;
-	map->ceilingTilesShift = ceilingLayer.tilesShift;
-	map->ceilingTileAreaShift = ceilingLayer.tileAreaShift;
 	map->ceilingColor = ceilingLayer.color;
 	map->ceilingAltitude = ceilingLayer.altitude;
 	map->ceilingReady = 1;
@@ -217,8 +159,19 @@ static inline void PrepareToDraw(SDL_Texture *screen, int **pixels, int *pitch, 
 	*pitch /= sizeof(int);
 
 	// Fill screen with a single color
-	for(int i = 0; i < (*pitch) * (*height); i++)
-		(*pixels)[i] = 0x9090E0FF;
+#ifdef USE_AVX2
+	const size_t count = (size_t)(*pitch) * (size_t)(*height);
+	if(SDL_HasAVX2()) {
+		const __m256i color = _mm256_set1_epi32(0x9090E0FF);
+		size_t i = 0;
+		for(; i + 8 <= count; i += 8)
+			_mm256_storeu_si256((__m256i *)(void *)(*pixels + i), color);
+		for(; i < count; i++)
+			(*pixels)[i] = 0x9090E0FF;
+		return;
+	}
+#endif
+	SDL_memset4(*pixels, 0x9090E0FF, (size_t)(*pitch) * (size_t)(*height));
 }
 
 static inline void DrawVerticalLine(int *pixels, int pitch, int x, int top, int bottom, int color) {
@@ -233,125 +186,258 @@ static inline void DrawVerticalLine(int *pixels, int pitch, int x, int top, int 
 	}
 }
 
-static inline int MapOffsetForPoint(
-	float x, float y,
-	int width, int height,
-	int tileMask, int tileShift, int tilesShift, int tileAreaShift
-) {
-	const int mapx = ((int)x & (width - 1));
-	const int mapy = ((int)y & (height - 1));
-	const int tilex = mapx >> tileShift;
-	const int tiley = mapy >> tileShift;
-	const int tileIndex = (tiley << tilesShift) + tilex;
-	const int inTileOffset = ((mapy & tileMask) << tileShift) + (mapx & tileMask);
-	return (tileIndex << tileAreaShift) + inTileOffset;
-}
-
-static void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start, int end) {
-	if(!map->ready) return;
-	const int drawCeiling = map->ceilingReady && map->ceilingEnabled;
+static void DrawFromToFloorOnly(Map *map, Camera *cam, int *pixels, int pitch, int start, int end) {
 	const float scale = cam->maxhorizon / 2.5f;
 	const float sinang = SDL_sinf(cam->angle);
 	const float cosang = SDL_cosf(cam->angle);
 	const float camHeight = cam->height;
 	const float camHorizon = cam->horizon;
-	const float ceilingBase = map->ceilingBase;
-	float deltaz = 1.0f;
+	const float camDistance = cam->distance;
+	const float camPosX = cam->position.x;
+	const float camPosY = cam->position.y;
+	const float zstep = cam->zstep;
 
-	for(float z = 1.0f; z < cam->distance; z += deltaz) {
+	const int mapMask = map->width - 1;
+	const int mapShift = map->shift;
+	const int optimize = map->optimize;
+	const float optdist = map->optdist;
+	int *const hiddeny = map->hiddeny;
+	const int *const color = map->color;
+	const unsigned char *const altitude = map->altitude;
+
+	float deltaz = 1.0f;
+	for(float z = 1.0f; z < camDistance; z += deltaz) {
 		const float invz = scale / z;
+		const float dx = (2.0f * cosang * z) / (float)pitch;
+		const float dy = (-2.0f * sinang * z) / (float)pitch;
+		float px = ((-cosang - sinang) * z) + camPosX + (dx * (float)start);
+		float py = ((sinang - cosang) * z) + camPosY + (dy * (float)start);
 		int hasVisibleColumns = 0;
-		Point pLeft = {-cosang * z - sinang * z, sinang * z - cosang * z},
-		pRight = {cosang * z - sinang * z, -sinang * z - cosang * z},
-		pDelta = {
-			(pRight.x - pLeft.x) / (float)pitch,
-			(pRight.y - pLeft.y) / (float)pitch
-		};
-		pLeft.x += pDelta.x * start;
-		pLeft.y += pDelta.y * start;
-		POINT_ADD(pLeft, cam->position);
-		Point pAhead = pLeft;
-		const int canPrefetch = MAP_PREFETCH_AHEAD > 0 && MAP_PREFETCH_AHEAD < (end - start);
-		if(canPrefetch) {
-			pAhead.x += pDelta.x * MAP_PREFETCH_AHEAD;
-			pAhead.y += pDelta.y * MAP_PREFETCH_AHEAD;
-		}
-		for(int i = start; i < end; i++) {
-			if(canPrefetch) {
-				const int aheadOffset = MapOffsetForPoint(
-					pAhead.x, pAhead.y,
-					map->width, map->height,
-					map->tileMask, map->tileShift, map->tilesShift, map->tileAreaShift
-				);
-				PrefetchRead(&map->altitude[aheadOffset]);
-				PrefetchRead(&map->color[aheadOffset]);
-				if(drawCeiling) {
-					const int cAheadOffset = MapOffsetForPoint(
-						pAhead.x, pAhead.y,
-						map->ceilingWidth, map->ceilingHeight,
-						map->ceilingTileMask, map->ceilingTileShift,
-						map->ceilingTilesShift, map->ceilingTileAreaShift
-					);
-					PrefetchRead(&map->ceilingAltitude[cAheadOffset]);
-					PrefetchRead(&map->ceilingColor[cAheadOffset]);
-				}
-			}
-			if(drawCeiling) {
-				if(map->showny[i] >= map->hiddeny[i]) {
-					if(canPrefetch)
-						POINT_ADD(pAhead, pDelta);
-					POINT_ADD(pLeft, pDelta);
-					continue;
-				}
-			} else if(map->hiddeny[i] <= 0) {
-				if(canPrefetch)
-					POINT_ADD(pAhead, pDelta);
-				POINT_ADD(pLeft, pDelta);
+
+		for(int i = start; i < end; i++, px += dx, py += dy) {
+			const int h = hiddeny[i];
+			if(h <= 0)
 				continue;
-			}
 			hasVisibleColumns = 1;
 
-			if(drawCeiling) {
-				const int cOffset = MapOffsetForPoint(
-					pLeft.x, pLeft.y,
-					map->ceilingWidth, map->ceilingHeight,
-					map->ceilingTileMask, map->ceilingTileShift,
-					map->ceilingTilesShift, map->ceilingTileAreaShift
-				);
-				const int cBottom = (int)(
-					(camHeight - (ceilingBase - (float)map->ceilingAltitude[cOffset]))
-					* invz + camHorizon
-				);
-				const int cTop = map->showny[i];
-				const int cDrawBottom = min(cBottom, map->hiddeny[i]);
-				DrawVerticalLine(pixels, pitch, i, cTop, cDrawBottom, map->ceilingColor[cOffset]);
-				if(cBottom > map->showny[i])
-					map->showny[i] = min(cBottom, map->hiddeny[i]);
-			}
-
-			const int offset = MapOffsetForPoint(
-				pLeft.x, pLeft.y,
-				map->width, map->height,
-				map->tileMask, map->tileShift, map->tilesShift, map->tileAreaShift
-			);
-			const int floorTop = (int)((camHeight - (float)map->altitude[offset]) * invz + camHorizon);
-			const int drawFloorTop = drawCeiling ? max(floorTop, map->showny[i]) : floorTop;
-			DrawVerticalLine(pixels, pitch, i, drawFloorTop, map->hiddeny[i], map->color[offset]);
-			/*
-				Slightly speed up rendering by hiding
-				overlapping line segments.
-			*/
-			if(floorTop < map->hiddeny[i])
-				map->hiddeny[i] = (int)floorTop;
-			if(canPrefetch)
-				POINT_ADD(pAhead, pDelta);
-			POINT_ADD(pLeft, pDelta);
+			const int offset = ((((int)py & mapMask) << mapShift) + ((int)px & mapMask));
+			const int floorTop = (int)((camHeight - (float)altitude[offset]) * invz + camHorizon);
+			DrawVerticalLine(pixels, pitch, i, floorTop, h, color[offset]);
+			if(floorTop < h)
+				hiddeny[i] = floorTop;
 		}
 		if(!hasVisibleColumns)
 			break;
-		deltaz += cam->zstep;
-		if(map->optimize && z > map->optdist)
-			deltaz += cam->zstep * (z / 2.0f);
+		deltaz += zstep;
+		if(optimize && z > optdist)
+			deltaz += zstep * (z / 2.0f);
+	}
+}
+
+#ifdef USE_AVX2
+static void DrawFromToFloorOnlyAVX2(Map *map, Camera *cam, int *pixels, int pitch, int start, int end) {
+	const float scale = cam->maxhorizon / 2.5f;
+	const float sinang = SDL_sinf(cam->angle);
+	const float cosang = SDL_cosf(cam->angle);
+	const float camHeight = cam->height;
+	const float camHorizon = cam->horizon;
+	const float camDistance = cam->distance;
+	const float camPosX = cam->position.x;
+	const float camPosY = cam->position.y;
+	const float zstep = cam->zstep;
+
+	const int mapMask = map->width - 1;
+	const int mapShift = map->shift;
+	const int optimize = map->optimize;
+	const float optdist = map->optdist;
+	int *const hiddeny = map->hiddeny;
+	const int *const color = map->color;
+	const unsigned char *const altitude = map->altitude;
+
+	const __m256 lanes = _mm256_setr_ps(0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f);
+	const __m256i zeroi = _mm256_setzero_si256();
+	const __m256i mapMaskv = _mm256_set1_epi32(mapMask);
+	const __m256i shiftv = _mm256_set1_epi32(mapShift);
+
+	float deltaz = 1.0f;
+	for(float z = 1.0f; z < camDistance; z += deltaz) {
+		const float invz = scale / z;
+		const float dx = (2.0f * cosang * z) / (float)pitch;
+		const float dy = (-2.0f * sinang * z) / (float)pitch;
+		float px = ((-cosang - sinang) * z) + camPosX + (dx * (float)start);
+		float py = ((sinang - cosang) * z) + camPosY + (dy * (float)start);
+		int hasVisibleColumns = 0;
+
+		const __m256 dxv = _mm256_set1_ps(dx);
+		const __m256 dyv = _mm256_set1_ps(dy);
+		const __m256 invzv = _mm256_set1_ps(invz);
+		const __m256 camHeightv = _mm256_set1_ps(camHeight);
+		const __m256 camHorizonv = _mm256_set1_ps(camHorizon);
+
+		int i = start;
+		for(; i + 8 <= end; i += 8) {
+			const __m256i hiddenv = _mm256_loadu_si256((const __m256i *)(const void *)(hiddeny + i));
+			const __m256i visiblev = _mm256_cmpgt_epi32(hiddenv, zeroi);
+			const int visibleMask = _mm256_movemask_ps(_mm256_castsi256_ps(visiblev));
+			if(!visibleMask)
+				continue;
+			hasVisibleColumns = 1;
+
+			const __m256 chunkBaseX = _mm256_set1_ps(px + dx * (float)(i - start));
+			const __m256 chunkBaseY = _mm256_set1_ps(py + dy * (float)(i - start));
+			const __m256 lanePx = _mm256_add_ps(chunkBaseX, _mm256_mul_ps(dxv, lanes));
+			const __m256 lanePy = _mm256_add_ps(chunkBaseY, _mm256_mul_ps(dyv, lanes));
+			const __m256i ix = _mm256_and_si256(_mm256_cvttps_epi32(lanePx), mapMaskv);
+			const __m256i iy = _mm256_and_si256(_mm256_cvttps_epi32(lanePy), mapMaskv);
+			const __m256i offsetv = _mm256_add_epi32(_mm256_sllv_epi32(iy, shiftv), ix);
+			const __m256i colorv = _mm256_i32gather_epi32(color, offsetv, sizeof(int));
+
+			int offsets[8], tops[8], hiddens[8], colors[8], alts[8];
+			_mm256_storeu_si256((__m256i *)(void *)offsets, offsetv);
+			_mm256_storeu_si256((__m256i *)(void *)hiddens, hiddenv);
+			_mm256_storeu_si256((__m256i *)(void *)colors, colorv);
+			for(int lane = 0; lane < 8; lane++)
+				alts[lane] = (int)altitude[offsets[lane]];
+
+			const __m256i altv = _mm256_setr_epi32(alts[0], alts[1], alts[2], alts[3], alts[4], alts[5], alts[6], alts[7]);
+			const __m256 floorTopf = _mm256_add_ps(
+				_mm256_mul_ps(_mm256_sub_ps(camHeightv, _mm256_cvtepi32_ps(altv)), invzv),
+				camHorizonv
+			);
+			const __m256i floorTopv = _mm256_cvttps_epi32(floorTopf);
+			_mm256_storeu_si256((__m256i *)(void *)tops, floorTopv);
+
+			for(int lane = 0; lane < 8; lane++) {
+				if((visibleMask & (1 << lane)) == 0)
+					continue;
+				const int col = i + lane;
+				const int top = tops[lane];
+				const int hidden = hiddens[lane];
+				DrawVerticalLine(pixels, pitch, col, top, hidden, colors[lane]);
+				if(top < hidden)
+					hiddeny[col] = top;
+			}
+		}
+
+		for(; i < end; i++) {
+			const int h = hiddeny[i];
+			if(h <= 0)
+				continue;
+			hasVisibleColumns = 1;
+
+			const float lanePx = px + dx * (float)(i - start);
+			const float lanePy = py + dy * (float)(i - start);
+			const int offset = ((((int)lanePy & mapMask) << mapShift) + ((int)lanePx & mapMask));
+			const int floorTop = (int)((camHeight - (float)altitude[offset]) * invz + camHorizon);
+			DrawVerticalLine(pixels, pitch, i, floorTop, h, color[offset]);
+			if(floorTop < h)
+				hiddeny[i] = floorTop;
+		}
+
+		if(!hasVisibleColumns)
+			break;
+		deltaz += zstep;
+		if(optimize && z > optdist)
+			deltaz += zstep * (z / 2.0f);
+	}
+}
+#endif
+
+static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pitch, int start, int end) {
+	const float scale = cam->maxhorizon / 2.5f;
+	const float sinang = SDL_sinf(cam->angle);
+	const float cosang = SDL_cosf(cam->angle);
+	const float camHeight = cam->height;
+	const float camHorizon = cam->horizon;
+	const float camDistance = cam->distance;
+	const float camPosX = cam->position.x;
+	const float camPosY = cam->position.y;
+	const float zstep = cam->zstep;
+	const float ceilingBase = map->ceilingBase;
+
+	const int floorMask = map->width - 1;
+	const int floorShift = map->shift;
+	const int ceilMask = map->ceilingWidth - 1;
+	const int ceilShift = map->ceilingShift;
+	const int optimize = map->optimize;
+	const float optdist = map->optdist;
+	int *const hiddeny = map->hiddeny;
+	int *const showny = map->showny;
+	const int *const floorColor = map->color;
+	const unsigned char *const floorAltitude = map->altitude;
+	const int *const ceilingColor = map->ceilingColor;
+	const unsigned char *const ceilingAltitude = map->ceilingAltitude;
+
+	float deltaz = 1.0f;
+	for(float z = 1.0f; z < camDistance; z += deltaz) {
+		const float invz = scale / z;
+		const float dx = (2.0f * cosang * z) / (float)pitch;
+		const float dy = (-2.0f * sinang * z) / (float)pitch;
+		float px = ((-cosang - sinang) * z) + camPosX + (dx * (float)start);
+		float py = ((sinang - cosang) * z) + camPosY + (dy * (float)start);
+		int hasVisibleColumns = 0;
+
+		for(int i = start; i < end; i++, px += dx, py += dy) {
+			const int h = hiddeny[i];
+			int s = showny[i];
+			if(s >= h)
+				continue;
+			hasVisibleColumns = 1;
+
+			const int cOffset = ((((int)py & ceilMask) << ceilShift) + ((int)px & ceilMask));
+			const int cBottom = (int)((camHeight - (ceilingBase - (float)ceilingAltitude[cOffset])) * invz + camHorizon);
+			DrawVerticalLine(pixels, pitch, i, s, min(cBottom, h), ceilingColor[cOffset]);
+			if(cBottom > s)
+				s = min(cBottom, h);
+			showny[i] = s;
+
+			const int fOffset = ((((int)py & floorMask) << floorShift) + ((int)px & floorMask));
+			const int floorTop = (int)((camHeight - (float)floorAltitude[fOffset]) * invz + camHorizon);
+			DrawVerticalLine(pixels, pitch, i, max(floorTop, s), h, floorColor[fOffset]);
+			if(floorTop < h)
+				hiddeny[i] = floorTop;
+		}
+		if(!hasVisibleColumns)
+			break;
+		deltaz += zstep;
+		if(optimize && z > optdist)
+			deltaz += zstep * (z / 2.0f);
+	}
+}
+
+static inline void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start, int end) {
+	if(!map->ready) return;
+	if(map->ceilingReady && map->ceilingEnabled)
+		DrawFromToFloorAndCeiling(map, cam, pixels, pitch, start, end);
+	else
+#ifdef USE_AVX2
+	if(SDL_HasAVX2())
+		DrawFromToFloorOnlyAVX2(map, cam, pixels, pitch, start, end);
+	else
+#endif
+		DrawFromToFloorOnly(map, cam, pixels, pitch, start, end);
+}
+
+static inline void ResetColumnBounds(Map *map, int pitch, int height) {
+#ifdef USE_AVX2
+	if(SDL_HasAVX2()) {
+		const __m256i hiddenv = _mm256_set1_epi32(height);
+		const __m256i shownv = _mm256_setzero_si256();
+		int i = 0;
+		for(; i + 8 <= pitch; i += 8) {
+			_mm256_storeu_si256((__m256i *)(void *)(map->hiddeny + i), hiddenv);
+			_mm256_storeu_si256((__m256i *)(void *)(map->showny + i), shownv);
+		}
+		for(; i < pitch; i++) {
+			map->hiddeny[i] = height;
+			map->showny[i] = 0;
+		}
+		return;
+	}
+#endif
+	for(int i = 0; i < pitch; i++) {
+		map->hiddeny[i] = height;
+		map->showny[i] = 0;
 	}
 }
 
@@ -360,17 +446,13 @@ void Map_Draw(Map *map, Camera *cam) {
 	if(!map->redraw) return;
 	int *pixels = NULL, pitch = 0, height = 0;
 	PrepareToDraw((SDL_Texture *)map->screen, &pixels, &pitch, &height);
-	for(int i = 0; i < pitch; i++) {
-		map->hiddeny[i] = height;
-		map->showny[i] = 0;
-	}
+	ResetColumnBounds(map, pitch, height);
 	DrawFromTo(map, cam, pixels, pitch, 0, pitch);
 
 	SDL_UnlockTexture((SDL_Texture *)map->screen);
 	map->redraw = 0;
 }
 #else
-#include <SDL_cpuinfo.h>
 
 static int RenderThread(void *ptr) {
 	struct sMapRenderCtx *ctx = (struct sMapRenderCtx *)ptr;
@@ -403,10 +485,7 @@ void Map_Draw(Map *map, Camera *cam) {
 		map->rgctx.cam = cam;
 		map->rgctx.pixels = pixels;
 		map->rgctx.pitch = pitch;
-		for(int i = 0; i < pitch; i++) {
-			map->hiddeny[i] = height;
-			map->showny[i] = 0;
-		}
+		ResetColumnBounds(map, pitch, height);
 		SDL_CondBroadcast(map->rgctx.unlockcond);
 		for(int i = 0; i < map->rctxcnt && !failed; i++)
 			failed = SDL_SemWaitTimeout(map->rctxs[i].semaphore, 600) != 0;
@@ -520,15 +599,7 @@ void Map_Close(Map *map) {
 	map->width = 0;
 	map->height = 0;
 	map->shift = 0;
-	map->tileShift = 0;
-	map->tileMask = 0;
-	map->tilesShift = 0;
-	map->tileAreaShift = 0;
 	map->ceilingWidth = 0;
 	map->ceilingHeight = 0;
 	map->ceilingShift = 0;
-	map->ceilingTileShift = 0;
-	map->ceilingTileMask = 0;
-	map->ceilingTilesShift = 0;
-	map->ceilingTileAreaShift = 0;
 }

@@ -52,6 +52,7 @@ Comanche's Voxel Space rendering algorithm written in C using SDL. You can try i
 * ``winf`` - Increase warning level;
 * ``woff`` - Disable all compiler warnings;
 * ``threaded`` - Build with multithreaded renderer;
+* ``avx2`` - Build with AVX2 optimizations (x86_64 native builds only);
 * ``sdlimage`` - Build with png/jpg/... images support;
 * ``overlay`` - Build with onscreen information module;
 * ``web`` - Build for browsers using [emscripten](https://emscripten.org/);
@@ -68,6 +69,7 @@ Comanche's Voxel Space rendering algorithm written in C using SDL. You can try i
 * You can change map by dropping two images (height map and diffuse map) on the Voxel Space window;
 * The first letter in file name tells to the VoxelSpace how to use dropped file. ``D`` - use as a height map, and ``C`` - use as a diffuse map;
 * Also you can change default map by passing commandline arguments to VoxelSpace: ``vs.exe -dm "path/to/diffuse.png"  -hm "path/to/height.png"`` or ``vs.exe /diffuse "path/to/image.png" /height "path/to/image.png"``;
+* Benchmark mode is available via ``-benchmark [seconds]`` (alias: ``-bm``; default duration is 10 seconds);
 * So far there are no VoxelSpace commandline arguments list, see ``src/argparse.c`` for more information.
 
 ## Thanks

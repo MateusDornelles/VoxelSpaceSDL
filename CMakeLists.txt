@@ -12,7 +12,8 @@ endif()
 
 option(VOXEL_USE_SDL_IMAGE "Build with SDL2_image support" OFF)
 option(VOXEL_USE_OVERLAY "Build with overlay module (SDL2_ttf)" OFF)
-option(VOXEL_USE_THREADED_RENDER "Build with threaded renderer" OFF)
+option(VOXEL_USE_THREADED_RENDER "Build with threaded renderer" ON)
+option(VOXEL_USE_AVX2 "Build with AVX2 optimizations" ON)
 option(VOXEL_WARNINGS_EXTRA "Enable extra compiler warnings" OFF)
 
 file(GLOB VOXEL_CORE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
@@ -72,6 +73,15 @@ endif()
 
 if(VOXEL_USE_THREADED_RENDER)
 	target_compile_definitions(vs PRIVATE USE_THREADED_RENDER)
+endif()
+
+if(VOXEL_USE_AVX2 AND NOT EMSCRIPTEN)
+	target_compile_definitions(vs PRIVATE USE_AVX2)
+	if(MSVC)
+		target_compile_options(vs PRIVATE /arch:AVX2)
+	else()
+		target_compile_options(vs PRIVATE -mavx2)
+	endif()
 endif()
 
 if(VOXEL_WARNINGS_EXTRA)

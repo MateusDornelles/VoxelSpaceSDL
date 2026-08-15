@@ -17,8 +17,8 @@
 #else
 #define GRAPHICS_TITLE "VoxelSpace SDL"
 #endif
-#define GRAPHICS_WIDTH 960 // SDL window width
-#define GRAPHICS_HEIGHT 540 // SDL window height
+#define GRAPHICS_WIDTH 640 // SDL window width
+#define GRAPHICS_HEIGHT 360 // SDL window height
 
 #define INPUT_MOUSE_SENS 0.0022f // Mouse sensitivity for camera control
 #define INPUT_TOUCH_SENS 80.0f // Gamepad touchpad sensitivity
@@ -33,7 +33,7 @@
 #define CAMERA_HEIGHT_DEFAULT 178.0f // Default camera height
 #define CAMERA_HEIGHT_MAX 30000.0f // Maximum camera height
 #define CAMERA_HEIGHT_MOD 0.02f // Influence of horizon line on movement vector
-#define CAMERA_DISTANCE_DEFAULT 750.0f // Default render distance
+#define CAMERA_DISTANCE_DEFAULT 1500.0f // Default render distance
 #define CAMERA_DISTANCE_MIN 300.0f // Minimum render distance
 #define CAMERA_DISTANCE_MAX 30000.0f // Maximum render distance
 #define CAMERA_DISTANCE_STEP 75.0f // Render distance adjustment step

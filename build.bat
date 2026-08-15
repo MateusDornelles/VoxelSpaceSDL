@@ -5,6 +5,7 @@ set VOXEL_OUTDIR=out
 set VOXEL_OUTFILE=vs.exe
 set VOXEL_EMSCRIPTEN=0
 set VOXEL_THREADED=0
+set VOXEL_AVX2=0
 set VOXEL_RUN=0
 set VOXEL_OPT=no
 set VOXEL_DEBUG=0
@@ -18,6 +19,7 @@ IF "%1"=="overlay" set VOXEL_USE_SDLTTF=1
 IF "%1"=="dbg" set VOXEL_DEBUG=1
 IF "%1"=="web" set VOXEL_EMSCRIPTEN=1
 IF "%1"=="threaded" set VOXEL_THREADED=1
+IF "%1"=="avx2" set VOXEL_AVX2=1
 IF "%1"=="optspeed" set VOXEL_OPT=speed
 IF "%1"=="optsize" set VOXEL_OPT=size
 IF "%1"=="woff" set VOXEL_WARN=no
@@ -50,6 +52,10 @@ set VOXEL_LIBS=SDL2.lib
 
 IF "%VOXEL_THREADED%"=="1" (
 	set VOXEL_CFLAGS=!VOXEL_CFLAGS! /DUSE_THREADED_RENDER
+)
+
+IF "%VOXEL_AVX2%"=="1" (
+	set VOXEL_CFLAGS=!VOXEL_CFLAGS! /DUSE_AVX2 /arch:AVX2
 )
 
 IF "%VOXEL_USE_SDLIMAGE%"=="1" (
@@ -118,6 +124,10 @@ set VOXEL_OUTDIR=%VOXEL_OUTDIR%/html
 set VOXEL_OUTFILE=index.html
 
 IF NOT EXIST %VOXEL_OUTDIR% MD !VOXEL_OUTDIR!
+
+IF "%VOXEL_AVX2%"=="1" (
+	echo WARN: AVX2 optimizations are not supported for emscripten builds
+)
 
 IF "%VOXEL_RUN%"=="1" (
 	set VOXEL_CFLAGS=!VOXEL_CFLAGS! --emrun

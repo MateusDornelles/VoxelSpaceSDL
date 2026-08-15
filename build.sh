@@ -10,6 +10,7 @@ VOXEL_SDLIMAGE=0;
 VOXEL_SDLTTF=0;
 VOXEL_EMSCRIPTEN=0;
 VOXEL_THREADED=0;
+VOXEL_AVX2=0;
 VOXEL_LIBS=sdl2;
 VOXEL_WARN="sign";
 VOXEL_OPT="-O2";
@@ -21,6 +22,7 @@ do
 	if [ "$a" == "sdlimage" ]; then VOXEL_SDLIMAGE=1; fi
 	if [ "$a" == "overlay" ]; then VOXEL_SDLTTF=1; fi
 	if [ "$a" == "threaded" ]; then VOXEL_THREADED=1; fi
+	if [ "$a" == "avx2" ]; then VOXEL_AVX2=1; fi
 	if [ "$a" == "woff" ]; then VOXEL_WARN="no"; fi
 	if [ "$a" == "winf" ]; then VOXEL_WARN="inform"; fi
 	if [ "$a" == "wall" ]; then VOXEL_WARN="all"; fi
@@ -50,6 +52,14 @@ if [ $VOXEL_EMSCRIPTEN -eq 1 ]; then
 	if [ $VOXEL_RUN -eq 1 ]; then VOXEL_CFLAGS="$VOXEL_CFLAGS --emrun"; fi
 elif [ $VOXEL_THREADED -eq 1 ]; then
 	VOXEL_CFLAGS="$VOXEL_CFLAGS -DUSE_THREADED_RENDER"
+fi
+
+if [ $VOXEL_AVX2 -eq 1 ]; then
+	if [ $VOXEL_EMSCRIPTEN -eq 1 ]; then
+		echo "WARN: AVX2 optimizations are not supported for web builds"
+	else
+		VOXEL_CFLAGS="$VOXEL_CFLAGS -DUSE_AVX2 -mavx2"
+	fi
 fi
 
 if [ $VOXEL_SDLIMAGE -eq 1 ]; then

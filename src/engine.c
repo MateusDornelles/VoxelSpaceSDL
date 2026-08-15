@@ -21,11 +21,13 @@ struct sContext {
 	} fps;
 	struct {
 		int enabled;
-		int logfps;
-		float duration;
-		Uint64 start;
-		Uint64 frames;
-	} bench;
+		Uint64 startCounter;
+		Uint64 durationTicks;
+		Uint64 frameCount;
+		Point basePosition;
+		float baseHeight;
+		float baseHorizon;
+	} benchmark;
 	SDL_Window *wnd;
 	SDL_Renderer *render;
 	SDL_Texture *screen;
@@ -164,6 +166,20 @@ static void DrawFPSCounter(void) {
 	SDL_SetRenderDrawBlendMode(ctx.render, oldBlendMode);
 }
 
+static inline void UpdateBenchmarkCamera(void) {
+	if(!ctx.benchmark.enabled)
+		return;
+
+	const float t = (float)ctx.benchmark.frameCount * 0.02f;
+	ctx.camera.angle = t * 0.65f;
+	ctx.camera.position.x = ctx.benchmark.basePosition.x + SDL_sinf(t * 1.3f) * 160.0f;
+	ctx.camera.position.y = ctx.benchmark.basePosition.y + SDL_cosf(t * 1.1f) * 160.0f;
+	ctx.camera.height = ctx.benchmark.baseHeight + SDL_sinf(t * 0.5f) * 18.0f;
+	ctx.camera.horizon = ctx.benchmark.baseHorizon + SDL_sinf(t * 0.8f) * (ctx.camera.maxhorizon * 0.08f);
+	ctx.camera.horizon = max(-ctx.camera.maxhorizon, min(ctx.camera.horizon, ctx.camera.maxhorizon));
+	ctx.map.redraw = 1;
+}
+
 static int SpawnScreen(void) {
 	int wndWidth = 0, wndHeight = 0;
 	int renderWidth = 0, renderHeight = 0;
@@ -201,13 +217,6 @@ static int SpawnScreen(void) {
 int Engine_Start(EngineSettings *es) {
 	SDL_SetMainReady();
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-	const char *benchSeconds = SDL_getenv("VOXEL_BENCH_SECONDS");
-	const char *benchLog = SDL_getenv("VOXEL_BENCH_LOG");
-	ctx.bench.enabled = benchSeconds && SDL_atof(benchSeconds) > 0.0f;
-	ctx.bench.logfps = benchLog && SDL_atoi(benchLog) > 0;
-	ctx.bench.duration = ctx.bench.enabled ? SDL_atof(benchSeconds) : 0.0f;
-	ctx.bench.start = 0;
-	ctx.bench.frames = 0;
 	// Initialize SDL
 	if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
 		if(SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -290,7 +299,17 @@ int Engine_Start(EngineSettings *es) {
 	ctx.fps.sampleStart = SDL_GetPerformanceCounter();
 	ctx.fps.sampleFrames = 0;
 	ctx.fps.value = 0.0f;
-	ctx.bench.start = ctx.fps.sampleStart;
+	if(es->benchmarkSeconds > 0) {
+		ctx.benchmark.enabled = 1;
+		ctx.benchmark.frameCount = 0;
+		ctx.benchmark.startCounter = SDL_GetPerformanceCounter();
+		ctx.benchmark.durationTicks = (Uint64)es->benchmarkSeconds * SDL_GetPerformanceFrequency();
+		ctx.benchmark.basePosition = ctx.camera.position;
+		ctx.benchmark.baseHeight = ctx.camera.height;
+		ctx.benchmark.baseHorizon = ctx.camera.horizon;
+		ctx.map.redraw = 1;
+		SDL_Log("Benchmark enabled for %d second(s)", es->benchmarkSeconds);
+	}
 
 	Engine_CallListeners(LISTEN_ENGINE_START, NULL);
 	return 0;
@@ -334,10 +353,7 @@ int Engine_Update(void) {
 
 	// Run all listeners waiting for UPDATE
 	Engine_CallListeners(LISTEN_ENGINE_UPDATE, &ctx.deltaTime);
-
-	// Keep terrain rendering active in benchmark mode.
-	if(ctx.bench.enabled)
-		ctx.map.redraw = 1;
+	UpdateBenchmarkCamera();
 
 	// Redraw the world
 	Map_Draw(&ctx.map, &ctx.camera);
@@ -362,29 +378,33 @@ int Engine_Update(void) {
 	SDL_RenderPresent(ctx.render);
 
 	ctx.fps.sampleFrames++;
-	ctx.bench.frames++;
 	if(ctx.fps.sampleStart > 0) {
 		const Uint64 now = SDL_GetPerformanceCounter();
 		const double elapsed = (double)(now - ctx.fps.sampleStart) / SDL_GetPerformanceFrequency();
 		if(elapsed >= 0.25) {
 			ctx.fps.value = (float)(ctx.fps.sampleFrames / elapsed);
-			if(ctx.bench.logfps)
-				SDL_Log("BENCH_FPS instant=%.2f", ctx.fps.value);
 			ctx.fps.sampleFrames = 0;
 			ctx.fps.sampleStart = now;
 		}
 	}
-	if(ctx.bench.enabled && ctx.bench.start > 0) {
+	if(ctx.benchmark.enabled) {
+		ctx.benchmark.frameCount++;
 		const Uint64 now = SDL_GetPerformanceCounter();
-		const double elapsed = (double)(now - ctx.bench.start) / SDL_GetPerformanceFrequency();
-		if(elapsed >= ctx.bench.duration) {
-			const double avg = elapsed > 0.0 ? ((double)ctx.bench.frames / elapsed) : 0.0;
-			SDL_Log("BENCH_RESULT seconds=%.2f frames=%llu fps=%.2f",
-				elapsed, (unsigned long long)ctx.bench.frames, (float)avg
-			);
-			return 0;
+		const Uint64 elapsedTicks = now - ctx.benchmark.startCounter;
+			if(elapsedTicks >= ctx.benchmark.durationTicks) {
+				const double elapsed = (double)elapsedTicks / SDL_GetPerformanceFrequency();
+				const double fps = (double)ctx.benchmark.frameCount / elapsed;
+				const double frameMs = fps > 0.0 ? 1000.0 / fps : 0.0;
+				SDL_Log(
+					"Benchmark result: %.2fs, %llu frames, %.2f FPS, %.3f ms/frame",
+					elapsed,
+					(unsigned long long)ctx.benchmark.frameCount,
+					fps,
+					frameMs
+				);
+				return 0;
+			}
 		}
-	}
 
 	// Compute time spent on the full tick
 	ctx.lastTime = ctx.currTime;
