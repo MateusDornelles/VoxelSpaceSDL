@@ -453,24 +453,26 @@ void Engine_Stop(void) {
 }
 
 void Engine_End(void) {
-	if(ctx.wnd) {
-		SDL_DestroyWindow(ctx.wnd);
-		ctx.wnd = NULL;
+	// Stop render workers before releasing the texture they may reference.
+	Map_SetScreen(&ctx.map, NULL);
+	Map_Close(&ctx.map);
+
+	if(ctx.screen) {
+		SDL_DestroyTexture(ctx.screen);
+		ctx.screen = NULL;
 	}
 	if(ctx.render) {
 		SDL_DestroyRenderer(ctx.render);
 		ctx.render = NULL;
 	}
-	if(ctx.screen) {
-		SDL_DestroyTexture(ctx.screen);
-		ctx.screen = NULL;
+	if(ctx.wnd) {
+		SDL_DestroyWindow(ctx.wnd);
+		ctx.wnd = NULL;
 	}
 
 #ifdef USE_SDL_IMAGE
 	IMG_Quit();
 #endif
 
-	Map_SetScreen(&ctx.map, NULL);
-	Map_Close(&ctx.map);
 	SDL_Quit();
 }

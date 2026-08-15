@@ -33,7 +33,7 @@
 #define CAMERA_HEIGHT_DEFAULT 178.0f // Default camera height
 #define CAMERA_HEIGHT_MAX 30000.0f // Maximum camera height
 #define CAMERA_HEIGHT_MOD 0.02f // Influence of horizon line on movement vector
-#define CAMERA_DISTANCE_DEFAULT 1500.0f // Default render distance
+#define CAMERA_DISTANCE_DEFAULT 500.0f // Default render distance
 #define CAMERA_DISTANCE_MIN 300.0f // Minimum render distance
 #define CAMERA_DISTANCE_MAX 30000.0f // Maximum render distance
 #define CAMERA_DISTANCE_STEP 75.0f // Render distance adjustment step

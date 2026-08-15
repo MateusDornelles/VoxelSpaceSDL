@@ -97,8 +97,9 @@ static int LoadLayer(const char *diffuse, const char *height, struct sMapLayerDa
 	out->width = sHeight->w;
 	out->height = sHeight->h;
 	out->shift = (int)(SDL_log10(sHeight->w) / SDL_log10(2));
-	out->color = SDL_calloc(4, sHeight->w * sHeight->h);
-	out->altitude = SDL_calloc(1, sHeight->w * sHeight->h);
+	const size_t pixelCount = (size_t)sHeight->w * (size_t)sHeight->h;
+	out->color = SDL_calloc(pixelCount, sizeof(*out->color));
+	out->altitude = SDL_calloc(pixelCount, sizeof(*out->altitude));
 	if(!out->color || !out->altitude) {
 		ret = ERROR_MALLOC_FAIL;
 		goto cleanup;
@@ -153,15 +154,15 @@ int Map_Open(Map *map, const char *diffuse, const char *height) {
 	return Map_OpenDual(map, diffuse, height, diffuse, height);
 }
 
-static inline void PrepareToDraw(SDL_Texture *screen, int **pixels, int *pitch, int *height) {
-	SDL_LockTexture(screen, NULL, (void **)pixels, pitch);
-	SDL_QueryTexture(screen, NULL, NULL, NULL, height);
+static inline void PrepareToDraw(Map *map, int **pixels, int *pitch, int *height) {
+	SDL_LockTexture((SDL_Texture *)map->screen, NULL, (void **)pixels, pitch);
+	SDL_QueryTexture((SDL_Texture *)map->screen, NULL, NULL, NULL, height);
 	*pitch /= sizeof(int);
 
-	// Fill screen with a single color
+	// Fill screen with a single color.
 #ifdef USE_AVX2
 	const size_t count = (size_t)(*pitch) * (size_t)(*height);
-	if(SDL_HasAVX2()) {
+	if(map->useAVX2) {
 		const __m256i color = _mm256_set1_epi32(0x9090E0FF);
 		size_t i = 0;
 		for(; i + 8 <= count; i += 8)
@@ -179,7 +180,7 @@ static inline void DrawVerticalLine(int *pixels, int pitch, int x, int top, int 
 	if(top < 0) top = 0;
 	if(top > bottom) return;
 
-	int offset = ((top * pitch) + x);
+	int offset = (top * pitch) + x;
 	for(int i = top; i < bottom; i++) {
 		pixels[offset] = color;
 		offset += pitch;
@@ -359,6 +360,7 @@ static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pi
 	const int floorShift = map->shift;
 	const int ceilMask = map->ceilingWidth - 1;
 	const int ceilShift = map->ceilingShift;
+	const int sameLayout = floorMask == ceilMask && floorShift == ceilShift;
 	const int optimize = map->optimize;
 	const float optdist = map->optdist;
 	int *const hiddeny = map->hiddeny;
@@ -384,14 +386,19 @@ static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pi
 				continue;
 			hasVisibleColumns = 1;
 
-			const int cOffset = ((((int)py & ceilMask) << ceilShift) + ((int)px & ceilMask));
+			const int sampleX = (int)px;
+			const int sampleY = (int)py;
+			const int cOffset = (((sampleY & ceilMask) << ceilShift) + (sampleX & ceilMask));
 			const int cBottom = (int)((camHeight - (ceilingBase - (float)ceilingAltitude[cOffset])) * invz + camHorizon);
 			DrawVerticalLine(pixels, pitch, i, s, min(cBottom, h), ceilingColor[cOffset]);
 			if(cBottom > s)
 				s = min(cBottom, h);
 			showny[i] = s;
+			if(s >= h)
+				continue;
 
-			const int fOffset = ((((int)py & floorMask) << floorShift) + ((int)px & floorMask));
+			const int fOffset = sameLayout ? cOffset :
+				(((sampleY & floorMask) << floorShift) + (sampleX & floorMask));
 			const int floorTop = (int)((camHeight - (float)floorAltitude[fOffset]) * invz + camHorizon);
 			DrawVerticalLine(pixels, pitch, i, max(floorTop, s), h, floorColor[fOffset]);
 			if(floorTop < h)
@@ -407,20 +414,21 @@ static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pi
 
 static inline void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start, int end) {
 	if(!map->ready) return;
-	if(map->ceilingReady && map->ceilingEnabled)
+	if(map->ceilingReady && map->ceilingEnabled) {
 		DrawFromToFloorAndCeiling(map, cam, pixels, pitch, start, end);
-	else
+	} else {
 #ifdef USE_AVX2
-	if(SDL_HasAVX2())
-		DrawFromToFloorOnlyAVX2(map, cam, pixels, pitch, start, end);
-	else
+		if(map->useAVX2)
+			DrawFromToFloorOnlyAVX2(map, cam, pixels, pitch, start, end);
+		else
 #endif
-		DrawFromToFloorOnly(map, cam, pixels, pitch, start, end);
+			DrawFromToFloorOnly(map, cam, pixels, pitch, start, end);
+	}
 }
 
 static inline void ResetColumnBounds(Map *map, int pitch, int height) {
 #ifdef USE_AVX2
-	if(SDL_HasAVX2()) {
+	if(map->useAVX2) {
 		const __m256i hiddenv = _mm256_set1_epi32(height);
 		const __m256i shownv = _mm256_setzero_si256();
 		int i = 0;
@@ -445,7 +453,7 @@ static inline void ResetColumnBounds(Map *map, int pitch, int height) {
 void Map_Draw(Map *map, Camera *cam) {
 	if(!map->redraw) return;
 	int *pixels = NULL, pitch = 0, height = 0;
-	PrepareToDraw((SDL_Texture *)map->screen, &pixels, &pitch, &height);
+	PrepareToDraw(map, &pixels, &pitch, &height);
 	ResetColumnBounds(map, pitch, height);
 	DrawFromTo(map, cam, pixels, pitch, 0, pitch);
 
@@ -454,67 +462,106 @@ void Map_Draw(Map *map, Camera *cam) {
 }
 #else
 
-static int RenderThread(void *ptr) {
-	struct sMapRenderCtx *ctx = (struct sMapRenderCtx *)ptr;
-	struct SMapRenderGlobCtx *gctx = ctx->global;
-	SDL_mutex *mtx = SDL_CreateMutex();
-
+static void RenderChunks(struct SMapRenderGlobCtx *gctx) {
 	while(1) {
-		SDL_LockMutex(mtx);
-		SDL_CondWait(gctx->unlockcond, mtx);
-		if(gctx->endwork) break;
+		const int start = SDL_AtomicAdd(&gctx->nextColumn, gctx->chunkWidth);
+		if(start >= gctx->pitch) break;
 		DrawFromTo(
 			gctx->self, gctx->cam,
 			gctx->pixels, gctx->pitch,
-			ctx->start, ctx->end
+			start, min(start + gctx->chunkWidth, gctx->pitch)
 		);
-		SDL_SemPost(ctx->semaphore);
-		SDL_UnlockMutex(mtx);
+	}
+}
+
+static int RenderThread(void *ptr) {
+	struct sMapRenderCtx *ctx = (struct sMapRenderCtx *)ptr;
+	struct SMapRenderGlobCtx *gctx = ctx->global;
+	Uint64 generation = 0;
+
+	while(1) {
+		SDL_LockMutex(gctx->mutex);
+		while(!gctx->endwork && generation == gctx->generation)
+			SDL_CondWait(gctx->workcond, gctx->mutex);
+		if(gctx->endwork) {
+			SDL_UnlockMutex(gctx->mutex);
+			break;
+		}
+		generation = gctx->generation;
+		SDL_UnlockMutex(gctx->mutex);
+
+		RenderChunks(gctx);
+
+		SDL_LockMutex(gctx->mutex);
+		gctx->workersPending--;
+		if(gctx->workersPending == 0)
+			SDL_CondSignal(gctx->donecond);
+		SDL_UnlockMutex(gctx->mutex);
 	}
 
-	SDL_DestroyMutex(mtx);
-	SDL_SemPost(ctx->semaphore);
 	return 0;
 }
 
 void Map_Draw(Map *map, Camera *cam) {
 	if(!map->redraw) return;
-	int *pixels = NULL, pitch = 0, height = 0, failed = 0;
-	PrepareToDraw((SDL_Texture *)map->screen, &pixels, &pitch, &height);
+	int *pixels = NULL, pitch = 0, height = 0;
+	PrepareToDraw(map, &pixels, &pitch, &height);
 	if(map->ready) {
-		map->rgctx.cam = cam;
-		map->rgctx.pixels = pixels;
-		map->rgctx.pitch = pitch;
 		ResetColumnBounds(map, pitch, height);
-		SDL_CondBroadcast(map->rgctx.unlockcond);
-		for(int i = 0; i < map->rctxcnt && !failed; i++)
-			failed = SDL_SemWaitTimeout(map->rctxs[i].semaphore, 600) != 0;
+		if(map->rctxcnt > 0) {
+			SDL_LockMutex(map->rgctx.mutex);
+			map->rgctx.cam = cam;
+			map->rgctx.pixels = pixels;
+			map->rgctx.pitch = pitch;
+			map->rgctx.workersPending = map->rctxcnt;
+			SDL_AtomicSet(&map->rgctx.nextColumn, 0);
+			map->rgctx.generation++;
+			SDL_CondBroadcast(map->rgctx.workcond);
+			SDL_UnlockMutex(map->rgctx.mutex);
+
+			// The main thread also consumes chunks instead of waiting idle.
+			RenderChunks(&map->rgctx);
+
+			SDL_LockMutex(map->rgctx.mutex);
+			while(map->rgctx.workersPending > 0)
+				SDL_CondWait(map->rgctx.donecond, map->rgctx.mutex);
+			SDL_UnlockMutex(map->rgctx.mutex);
+		} else {
+			DrawFromTo(map, cam, pixels, pitch, 0, pitch);
+		}
 	}
 
 	SDL_UnlockTexture((SDL_Texture *)map->screen);
-	if(failed) {
-		SDL_LogWarn(0, "Failed to draw map, retrying...");
-		return;
-	}
 	map->redraw = 0;
 }
 
 static void DestroyThreads(Map *map) {
 	if(map->rctxs) {
+		SDL_LockMutex(map->rgctx.mutex);
 		map->rgctx.endwork = 1;
-		SDL_CondBroadcast(map->rgctx.unlockcond);
+		map->rgctx.generation++;
+		SDL_CondBroadcast(map->rgctx.workcond);
+		SDL_UnlockMutex(map->rgctx.mutex);
+
 		for(int i = 0; i < map->rctxcnt; i++) {
-			SDL_sem *sem = map->rctxs[i].semaphore;
-			SDL_SemWait(sem);
-			SDL_DestroySemaphore(sem);
+			SDL_WaitThread(map->rctxs[i].self, NULL);
+			map->rctxs[i].self = NULL;
 		}
 
 		SDL_free(map->rctxs);
 		map->rctxs = NULL;
 	}
-	if(map->rgctx.unlockcond) {
-		SDL_DestroyCond(map->rgctx.unlockcond);
-		map->rgctx.unlockcond = NULL;
+	if(map->rgctx.donecond) {
+		SDL_DestroyCond(map->rgctx.donecond);
+		map->rgctx.donecond = NULL;
+	}
+	if(map->rgctx.workcond) {
+		SDL_DestroyCond(map->rgctx.workcond);
+		map->rgctx.workcond = NULL;
+	}
+	if(map->rgctx.mutex) {
+		SDL_DestroyMutex(map->rgctx.mutex);
+		map->rgctx.mutex = NULL;
 	}
 	if(map->hiddeny) {
 		SDL_free(map->hiddeny);
@@ -544,6 +591,9 @@ void Map_SetScreen(Map *map, void *screen) {
 	if(!screen) return;
 	int width = 0;
 	if(SDL_QueryTexture(screen, NULL, NULL, &width, NULL) == 0) {
+#ifdef USE_AVX2
+		map->useAVX2 = SDL_HasAVX2();
+#endif
 		map->hiddeny = SDL_calloc(4, width);
 		map->showny = SDL_calloc(4, width);
 		map->redraw = 1;
@@ -554,19 +604,35 @@ void Map_SetScreen(Map *map, void *screen) {
 #ifdef USE_THREADED_RENDER
 		map->rgctx.self = map;
 		map->rgctx.endwork = 0;
-		map->rgctx.unlockcond = SDL_CreateCond();
+		map->rgctx.generation = 0;
+		map->rgctx.workersPending = 0;
+		// Keep enough jobs to balance uneven columns without repeating too much setup.
+		map->rgctx.chunkWidth = width <= 1024 ? 24 : 32;
+		map->rgctx.mutex = SDL_CreateMutex();
+		map->rgctx.workcond = SDL_CreateCond();
+		map->rgctx.donecond = SDL_CreateCond();
 		// If this value was not set externally, pick a default.
-		if(!map->rctxcnt) map->rctxcnt = max(SDL_GetCPUCount() - 1, 1);
-		map->rctxs = SDL_calloc(map->rctxcnt, sizeof(struct sMapRenderCtx));
+		if(map->rctxcnt <= 0) map->rctxcnt = max(SDL_GetCPUCount() - 1, 1);
+		map->rctxcnt = min(map->rctxcnt, max(width / map->rgctx.chunkWidth, 1));
 
-		int perthwidth = (width / map->rctxcnt) + 1;
-		for(int i = 0; i < map->rctxcnt; i++) {
-			struct sMapRenderCtx *ctx = &map->rctxs[i];
-			ctx->semaphore = SDL_CreateSemaphore(0);
-			ctx->global = &map->rgctx;
-			ctx->start = i * perthwidth;
-			ctx->end = min(ctx->start + perthwidth, width);
-			ctx->self = SDL_CreateThread(RenderThread, NULL, ctx);
+		if(map->rgctx.mutex && map->rgctx.workcond && map->rgctx.donecond)
+			map->rctxs = SDL_calloc(map->rctxcnt, sizeof(struct sMapRenderCtx));
+		if(!map->rctxs) {
+			SDL_LogWarn(0, "Failed to initialize render threads; using the main thread");
+			map->rctxcnt = 0;
+		} else {
+			const int requestedThreads = map->rctxcnt;
+			map->rctxcnt = 0;
+			for(int i = 0; i < requestedThreads; i++) {
+				struct sMapRenderCtx *ctx = &map->rctxs[i];
+				ctx->global = &map->rgctx;
+				ctx->self = SDL_CreateThread(RenderThread, "voxel-render", ctx);
+				if(!ctx->self) {
+					SDL_LogWarn(0, "Failed to create render thread: %s", SDL_GetError());
+					break;
+				}
+				map->rctxcnt++;
+			}
 		}
 #endif
 	} else {

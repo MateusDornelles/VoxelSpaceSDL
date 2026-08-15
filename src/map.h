@@ -2,6 +2,7 @@
 #define VSMAP_H
 #include "camera.h"
 #ifdef USE_THREADED_RENDER
+#include <SDL_atomic.h>
 #include <SDL_thread.h>
 #endif
 
@@ -24,6 +25,9 @@ typedef struct sMap {
 	int ceilingTileAreaShift; // Bit shift for ceiling tile area
 	int optimize; // Enable draw-time optimizations
 	float optdist; // Distance where quality reduction starts
+#ifdef USE_AVX2
+	int useAVX2; // Cached CPU support check
+#endif
 	float ceilingBase; // Base ceiling height in world space
 	int *hiddeny; // Lower draw bound per column
 	int *showny; // Upper draw bound per column
@@ -35,19 +39,23 @@ typedef struct sMap {
 
 #ifdef USE_THREADED_RENDER
 	struct SMapRenderGlobCtx {
-		SDL_cond *unlockcond; // Condition used to wake render threads
+		SDL_mutex *mutex; // Protects render generation and completion state
+		SDL_cond *workcond; // Condition used to publish a new frame
+		SDL_cond *donecond; // Condition used to report frame completion
 		struct sMap *self; // Pointer to map data
 		Camera *cam; // Pointer to camera data
-		int endwork; // If 1, all awakened threads exit
+		int endwork; // If 1, all render threads exit
+		Uint64 generation; // Monotonically increasing frame identifier
+		int workersPending; // Workers that have not finished this frame
+		SDL_atomic_t nextColumn; // Start of the next render chunk
+		int chunkWidth; // Number of columns claimed by each render job
 		int *pixels; // Pointer to screen pixel buffer
 		int pitch; // Pixel buffer row length
 	} rgctx; // Shared render context
 	int rctxcnt; // Number of render threads
 	struct sMapRenderCtx {
-		SDL_sem *semaphore; // Semaphore used to wait for thread completion
 		struct SMapRenderGlobCtx *global; // Shared context used by all threads
 		SDL_Thread *self; // Thread object pointer
-		int start, end; // Start/end of the slice rendered by this thread
 	} *rctxs;
 #endif
 } Map;
