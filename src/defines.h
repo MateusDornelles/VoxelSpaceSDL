@@ -19,6 +19,7 @@
 #endif
 #define GRAPHICS_WIDTH 640 // SDL window width
 #define GRAPHICS_HEIGHT 360 // SDL window height
+#define GRAPHICS_SKY_COLOR 0x9090E0FF // Background and distance fog color
 
 #define INPUT_MOUSE_SENS 0.0022f // Mouse sensitivity for camera control
 #define INPUT_TOUCH_SENS 80.0f // Gamepad touchpad sensitivity
@@ -33,10 +34,14 @@
 #define CAMERA_HEIGHT_DEFAULT 178.0f // Default camera height
 #define CAMERA_HEIGHT_MAX 30000.0f // Maximum camera height
 #define CAMERA_HEIGHT_MOD 0.02f // Influence of horizon line on movement vector
-#define CAMERA_DISTANCE_DEFAULT 500.0f // Default render distance
+#define CAMERA_DISTANCE_DEFAULT 600.0f // Default render distance
 #define CAMERA_DISTANCE_MIN 300.0f // Minimum render distance
 #define CAMERA_DISTANCE_MAX 30000.0f // Maximum render distance
 #define CAMERA_DISTANCE_STEP 75.0f // Render distance adjustment step
+#define CAMERA_FOG_START_RATIO 0.5833f // Fog starts at roughly 350 units at default distance
+#define CAMERA_FOG_END_RATIO 0.9667f // Fog reaches the sky color before the draw cutoff
+#define CAMERA_LOD_START_RATIO 0.5f // Gradually reduce depth detail in the far half
+#define CAMERA_LOD_STRENGTH 0.35f // Far-distance depth step multiplier
 #define CAMERA_POSITION_DEFAULT POINT_MAKE(512.0f, 800.0f) // Default camera position
 #define CAMERA_ZSTEP_DEFAULT 0.002f // Default Z-axis step
 #define CAMERA_ZSTEP_MIN 0.001f // Minimum Z-axis step

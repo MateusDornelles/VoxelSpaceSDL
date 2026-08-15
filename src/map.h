@@ -13,16 +13,8 @@ typedef struct sMap {
 	int redraw; // Whether the map needs to be redrawn
 	int width, height; // Floor map dimensions
 	int shift; // Bit shift for floor map width
-	int tileShift; // Bit shift for floor tile side
-	int tileMask; // Floor tile side minus one
-	int tilesShift; // Bit shift for tiles-per-row in floor map
-	int tileAreaShift; // Bit shift for floor tile area
 	int ceilingWidth, ceilingHeight; // Ceiling map dimensions
 	int ceilingShift; // Bit shift for ceiling map width
-	int ceilingTileShift; // Bit shift for ceiling tile side
-	int ceilingTileMask; // Ceiling tile side minus one
-	int ceilingTilesShift; // Bit shift for tiles-per-row in ceiling map
-	int ceilingTileAreaShift; // Bit shift for ceiling tile area
 	int optimize; // Enable draw-time optimizations
 	float optdist; // Distance where quality reduction starts
 #ifdef USE_AVX2
@@ -65,13 +57,7 @@ int Map_Open(Map *map, const char *diffuse, const char *height);
 int Map_OpenDual(Map *map, const char *diffuse, const char *height, const char *ceilingDiffuse, const char *ceilingHeight);
 static inline Uint8 Map_GetHeight(Map *map, Point *p) {
 	if(!map->ready) return 0;
-	const unsigned int mapx = (unsigned int)((int)p->x & (map->width - 1));
-	const unsigned int mapy = (unsigned int)((int)p->y & (map->height - 1));
-	const unsigned int tilex = mapx >> map->tileShift;
-	const unsigned int tiley = mapy >> map->tileShift;
-	const unsigned int tileIndex = (tiley << map->tilesShift) + tilex;
-	const unsigned int inTileOffset = ((mapy & map->tileMask) << map->tileShift) + (mapx & map->tileMask);
-	const unsigned int offset = (tileIndex << map->tileAreaShift) + inTileOffset;
+	unsigned int offset = (((int)p->y & (map->width - 1)) << map->shift) + ((int)p->x & (map->height - 1));
 	return map->altitude[offset];
 }
 void Map_Draw(Map *map, Camera *cam);

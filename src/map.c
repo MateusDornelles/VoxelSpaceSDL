@@ -163,16 +163,61 @@ static inline void PrepareToDraw(Map *map, int **pixels, int *pitch, int *height
 #ifdef USE_AVX2
 	const size_t count = (size_t)(*pitch) * (size_t)(*height);
 	if(map->useAVX2) {
-		const __m256i color = _mm256_set1_epi32(0x9090E0FF);
+		const __m256i color = _mm256_set1_epi32(GRAPHICS_SKY_COLOR);
 		size_t i = 0;
 		for(; i + 8 <= count; i += 8)
 			_mm256_storeu_si256((__m256i *)(void *)(*pixels + i), color);
 		for(; i < count; i++)
-			(*pixels)[i] = 0x9090E0FF;
+			(*pixels)[i] = GRAPHICS_SKY_COLOR;
 		return;
 	}
 #endif
-	SDL_memset4(*pixels, 0x9090E0FF, (size_t)(*pitch) * (size_t)(*height));
+	SDL_memset4(*pixels, GRAPHICS_SKY_COLOR, (size_t)(*pitch) * (size_t)(*height));
+}
+
+static inline float SmoothStep(float value) {
+	value = max(0.0f, min(value, 1.0f));
+	return value * value * (3.0f - (2.0f * value));
+}
+
+static inline int DistanceFogAmount(float z, float distance) {
+	const float start = distance * CAMERA_FOG_START_RATIO;
+	const float end = distance * CAMERA_FOG_END_RATIO;
+	if(z <= start) return 0;
+	if(z >= end) return 256;
+	return (int)(SmoothStep((z - start) / (end - start)) * 256.0f);
+}
+
+static inline int ApplyDistanceFog(int color, int amount) {
+	if(amount <= 0) return color;
+	if(amount >= 256) return GRAPHICS_SKY_COLOR;
+
+	const unsigned int from = (unsigned int)color;
+	const unsigned int to = GRAPHICS_SKY_COLOR;
+	const unsigned int inverse = 256u - (unsigned int)amount;
+	const unsigned int rb = (
+		(((from & 0x00ff00ffu) * inverse) + ((to & 0x00ff00ffu) * (unsigned int)amount)) >> 8
+	) & 0x00ff00ffu;
+	const unsigned int ag = (
+		(((((from >> 8) & 0x00ff00ffu) * inverse) +
+		(((to >> 8) & 0x00ff00ffu) * (unsigned int)amount)) >> 8) & 0x00ff00ffu
+	) << 8;
+	return (int)(rb | ag);
+}
+
+static inline float NextDepthStep(
+	float current, float z, float distance, float zstep,
+	int optimize, float optdist
+) {
+	current += zstep;
+	const float lodStart = distance * CAMERA_LOD_START_RATIO;
+	if(z > lodStart) {
+		const float lod = SmoothStep((z - lodStart) / (distance - lodStart));
+		current += zstep * (z / 2.0f) * CAMERA_LOD_STRENGTH * lod;
+	}
+	if(optimize && z > optdist)
+		current += zstep * (z / 2.0f);
+	return current;
 }
 
 static inline void DrawVerticalLine(int *pixels, int pitch, int x, int top, int bottom, int color) {
@@ -209,6 +254,7 @@ static void DrawFromToFloorOnly(Map *map, Camera *cam, int *pixels, int pitch, i
 	float deltaz = 1.0f;
 	for(float z = 1.0f; z < camDistance; z += deltaz) {
 		const float invz = scale / z;
+		const int fogAmount = DistanceFogAmount(z, camDistance);
 		const float dx = (2.0f * cosang * z) / (float)pitch;
 		const float dy = (-2.0f * sinang * z) / (float)pitch;
 		float px = ((-cosang - sinang) * z) + camPosX + (dx * (float)start);
@@ -223,15 +269,16 @@ static void DrawFromToFloorOnly(Map *map, Camera *cam, int *pixels, int pitch, i
 
 			const int offset = ((((int)py & mapMask) << mapShift) + ((int)px & mapMask));
 			const int floorTop = (int)((camHeight - (float)altitude[offset]) * invz + camHorizon);
-			DrawVerticalLine(pixels, pitch, i, floorTop, h, color[offset]);
+			DrawVerticalLine(
+				pixels, pitch, i, floorTop, h,
+				ApplyDistanceFog(color[offset], fogAmount)
+			);
 			if(floorTop < h)
 				hiddeny[i] = floorTop;
 		}
 		if(!hasVisibleColumns)
 			break;
-		deltaz += zstep;
-		if(optimize && z > optdist)
-			deltaz += zstep * (z / 2.0f);
+		deltaz = NextDepthStep(deltaz, z, camDistance, zstep, optimize, optdist);
 	}
 }
 
@@ -263,6 +310,7 @@ static void DrawFromToFloorOnlyAVX2(Map *map, Camera *cam, int *pixels, int pitc
 	float deltaz = 1.0f;
 	for(float z = 1.0f; z < camDistance; z += deltaz) {
 		const float invz = scale / z;
+		const int fogAmount = DistanceFogAmount(z, camDistance);
 		const float dx = (2.0f * cosang * z) / (float)pitch;
 		const float dy = (-2.0f * sinang * z) / (float)pitch;
 		float px = ((-cosang - sinang) * z) + camPosX + (dx * (float)start);
@@ -314,7 +362,10 @@ static void DrawFromToFloorOnlyAVX2(Map *map, Camera *cam, int *pixels, int pitc
 				const int col = i + lane;
 				const int top = tops[lane];
 				const int hidden = hiddens[lane];
-				DrawVerticalLine(pixels, pitch, col, top, hidden, colors[lane]);
+				DrawVerticalLine(
+					pixels, pitch, col, top, hidden,
+					ApplyDistanceFog(colors[lane], fogAmount)
+				);
 				if(top < hidden)
 					hiddeny[col] = top;
 			}
@@ -330,16 +381,17 @@ static void DrawFromToFloorOnlyAVX2(Map *map, Camera *cam, int *pixels, int pitc
 			const float lanePy = py + dy * (float)(i - start);
 			const int offset = ((((int)lanePy & mapMask) << mapShift) + ((int)lanePx & mapMask));
 			const int floorTop = (int)((camHeight - (float)altitude[offset]) * invz + camHorizon);
-			DrawVerticalLine(pixels, pitch, i, floorTop, h, color[offset]);
+			DrawVerticalLine(
+				pixels, pitch, i, floorTop, h,
+				ApplyDistanceFog(color[offset], fogAmount)
+			);
 			if(floorTop < h)
 				hiddeny[i] = floorTop;
 		}
 
 		if(!hasVisibleColumns)
 			break;
-		deltaz += zstep;
-		if(optimize && z > optdist)
-			deltaz += zstep * (z / 2.0f);
+		deltaz = NextDepthStep(deltaz, z, camDistance, zstep, optimize, optdist);
 	}
 }
 #endif
@@ -373,6 +425,7 @@ static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pi
 	float deltaz = 1.0f;
 	for(float z = 1.0f; z < camDistance; z += deltaz) {
 		const float invz = scale / z;
+		const int fogAmount = DistanceFogAmount(z, camDistance);
 		const float dx = (2.0f * cosang * z) / (float)pitch;
 		const float dy = (-2.0f * sinang * z) / (float)pitch;
 		float px = ((-cosang - sinang) * z) + camPosX + (dx * (float)start);
@@ -390,7 +443,10 @@ static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pi
 			const int sampleY = (int)py;
 			const int cOffset = (((sampleY & ceilMask) << ceilShift) + (sampleX & ceilMask));
 			const int cBottom = (int)((camHeight - (ceilingBase - (float)ceilingAltitude[cOffset])) * invz + camHorizon);
-			DrawVerticalLine(pixels, pitch, i, s, min(cBottom, h), ceilingColor[cOffset]);
+			DrawVerticalLine(
+				pixels, pitch, i, s, min(cBottom, h),
+				ApplyDistanceFog(ceilingColor[cOffset], fogAmount)
+			);
 			if(cBottom > s)
 				s = min(cBottom, h);
 			showny[i] = s;
@@ -400,15 +456,16 @@ static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pi
 			const int fOffset = sameLayout ? cOffset :
 				(((sampleY & floorMask) << floorShift) + (sampleX & floorMask));
 			const int floorTop = (int)((camHeight - (float)floorAltitude[fOffset]) * invz + camHorizon);
-			DrawVerticalLine(pixels, pitch, i, max(floorTop, s), h, floorColor[fOffset]);
+			DrawVerticalLine(
+				pixels, pitch, i, max(floorTop, s), h,
+				ApplyDistanceFog(floorColor[fOffset], fogAmount)
+			);
 			if(floorTop < h)
 				hiddeny[i] = floorTop;
 		}
 		if(!hasVisibleColumns)
 			break;
-		deltaz += zstep;
-		if(optimize && z > optdist)
-			deltaz += zstep * (z / 2.0f);
+		deltaz = NextDepthStep(deltaz, z, camDistance, zstep, optimize, optdist);
 	}
 }
 
