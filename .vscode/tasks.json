@@ -119,6 +119,65 @@
 				"Run VoxelSpace (OpenGL 3.3)"
 			],
 			"problemMatcher": []
+		},
+		{
+			"type": "shell",
+			"label": "Configure VoxelSpace (WASM)",
+			"command": "emcmake",
+			"args": [
+				"cmake",
+				"-S", ".",
+				"-B", "build-wasm",
+				"-DCMAKE_BUILD_TYPE=Release",
+				"-DVOXEL_USE_THREADED_RENDER=OFF",
+				"-DVOXEL_USE_AVX2=OFF",
+				"-DVOXEL_USE_SDL_IMAGE=OFF",
+				"-DVOXEL_USE_OVERLAY=OFF"
+			],
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "Build VoxelSpace (WASM)",
+			"command": "cmake",
+			"args": ["--build", "build-wasm", "--config", "Release", "-j"],
+			"dependsOn": "Configure VoxelSpace (WASM)",
+			"problemMatcher": ["$gcc"],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": false,
+				"reveal": "always",
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": true
+			},
+			"group": "build"
+		},
+		{
+			"type": "shell",
+			"label": "Run VoxelSpace (WASM)",
+			"command": "emrun",
+			"args": [
+				"--no-emrun-detect",
+				"build-wasm/bin/vs.html"
+			],
+			"dependsOn": "Build VoxelSpace (WASM)",
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": false,
+				"reveal": "always",
+				"panel": "dedicated",
+				"showReuseMessage": false,
+				"clear": true
+			}
 		}
 	]
 }

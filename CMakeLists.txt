@@ -31,6 +31,9 @@ add_executable(vs ${VOXEL_CORE_SOURCES} ${VOXEL_MODULE_SOURCES})
 target_include_directories(vs PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 if(EMSCRIPTEN)
+	target_compile_options(vs PRIVATE
+		"SHELL:-s USE_SDL=2"
+	)
 	target_link_options(vs PRIVATE
 		"SHELL:-s USE_SDL=2"
 		"SHELL:-s SINGLE_FILE=1"
