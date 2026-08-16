@@ -65,6 +65,20 @@ overlay is shown only by the software backend.
 Press `F10` while the program is running to switch backends. The map, camera,
 window size and fullscreen state are preserved.
 
+Integer scaling uses the same internal resolution in both backends. For
+example, `-scale 3` renders the scene at 640x360 and presents it at 1920x1080
+with nearest-neighbor scaling; OpenGL uses an offscreen color/depth framebuffer
+for this pass.
+
+### Polygon rendering
+
+Both desktop backends render polygon geometry together with the voxel terrain.
+The shared API in `src/polygon_renderer.h` accepts solid-color and textured
+triangles in map-space coordinates. Terrain and polygons share a depth buffer,
+so buildings, bridges and other meshes can pass behind hills correctly. The
+current demo scene places one flat and one textured box in front of the initial
+camera. See `docs/polygon-renderer.md` for the coordinate and material format.
+
 ### Arguments supported by build scripts
 
 * ``dbg`` - Build with debug symbols;

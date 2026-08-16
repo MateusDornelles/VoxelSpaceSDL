@@ -23,6 +23,8 @@ typedef struct sMap {
 	float ceilingBase; // Base ceiling height in world space
 	int *hiddeny; // Lower draw bound per column
 	int *showny; // Upper draw bound per column
+	float *depth; // Forward camera-space depth for every rendered pixel
+	int depthWidth, depthHeight;
 	int *color; // Floor texture
 	unsigned char *altitude; // Floor heightmap
 	int *ceilingColor; // Ceiling texture
@@ -65,5 +67,6 @@ static inline Uint8 Map_GetHeight(Map *map, Point *p) {
 	return map->altitude[offset];
 }
 void Map_Draw(Map *map, Camera *cam);
+float *Map_GetDepthBuffer(Map *map, int *width, int *height);
 void Map_Close(Map *map);
 #endif

@@ -161,6 +161,9 @@ static inline void PrepareToDraw(Map *map, int **pixels, int *pitch, int *height
 	SDL_LockTexture((SDL_Texture *)map->screen, NULL, (void **)pixels, pitch);
 	SDL_QueryTexture((SDL_Texture *)map->screen, NULL, NULL, NULL, height);
 	*pitch /= sizeof(int);
+	const size_t depthCount = (size_t)map->depthWidth * (size_t)map->depthHeight;
+	for(size_t i = 0; i < depthCount; i++)
+		map->depth[i] = CAMERA_DISTANCE_MAX + 1.0f;
 
 	// Fill screen with a single color.
 #ifdef USE_AVX2
@@ -244,15 +247,20 @@ static inline float NextDepthStep(
 	return current;
 }
 
-static inline void DrawVerticalLine(int *pixels, int pitch, int x, int top, int bottom, int color) {
+static inline void DrawVerticalLine(
+	Map *map, int *pixels, int pitch, int x, int top, int bottom, int color, float depth
+) {
 	// Clamp to screen bounds.
 	if(top < 0) top = 0;
 	if(top > bottom) return;
 
 	int offset = (top * pitch) + x;
+	int depthOffset = (top * map->depthWidth) + x;
 	for(int i = top; i < bottom; i++) {
 		pixels[offset] = color;
+		map->depth[depthOffset] = depth;
 		offset += pitch;
+		depthOffset += map->depthWidth;
 	}
 }
 
@@ -296,8 +304,8 @@ static void DrawFromToFloorOnly(Map *map, Camera *cam, int *pixels, int pitch, i
 				altitude, px, py, mapMask, mapShift);
 			const int floorTop = (int)((camHeight - sampledHeight) * invz + camHorizon);
 			DrawVerticalLine(
-				pixels, pitch, i, floorTop, h,
-				ApplyDistanceFog(color[offset], fogAmount)
+				map, pixels, pitch, i, floorTop, h,
+				ApplyDistanceFog(color[offset], fogAmount), z
 			);
 			if(floorTop < h)
 				hiddeny[i] = floorTop;
@@ -393,8 +401,8 @@ static void DrawFromToFloorOnlyAVX2(Map *map, Camera *cam, int *pixels, int pitc
 				const int top = tops[lane];
 				const int hidden = hiddens[lane];
 				DrawVerticalLine(
-					pixels, pitch, col, top, hidden,
-					ApplyDistanceFog(colors[lane], fogAmount)
+					map, pixels, pitch, col, top, hidden,
+					ApplyDistanceFog(colors[lane], fogAmount), z
 				);
 				if(top < hidden)
 					hiddeny[col] = top;
@@ -414,8 +422,8 @@ static void DrawFromToFloorOnlyAVX2(Map *map, Camera *cam, int *pixels, int pitc
 				altitude, lanePx, lanePy, mapMask, mapShift);
 			const int floorTop = (int)((camHeight - sampledHeight) * invz + camHorizon);
 			DrawVerticalLine(
-				pixels, pitch, i, floorTop, h,
-				ApplyDistanceFog(color[offset], fogAmount)
+				map, pixels, pitch, i, floorTop, h,
+				ApplyDistanceFog(color[offset], fogAmount), z
 			);
 			if(floorTop < h)
 				hiddeny[i] = floorTop;
@@ -478,8 +486,8 @@ static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pi
 				ceilingAltitude, px, py, ceilMask, ceilShift);
 			const int cBottom = (int)((camHeight - (ceilingBase - sampledCeilingHeight)) * invz + camHorizon);
 			DrawVerticalLine(
-				pixels, pitch, i, s, min(cBottom, h),
-				ApplyDistanceFog(ceilingColor[cOffset], fogAmount)
+				map, pixels, pitch, i, s, min(cBottom, h),
+				ApplyDistanceFog(ceilingColor[cOffset], fogAmount), z
 			);
 			if(cBottom > s)
 				s = min(cBottom, h);
@@ -493,8 +501,8 @@ static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pi
 				floorAltitude, px, py, floorMask, floorShift);
 			const int floorTop = (int)((camHeight - sampledFloorHeight) * invz + camHorizon);
 			DrawVerticalLine(
-				pixels, pitch, i, max(floorTop, s), h,
-				ApplyDistanceFog(floorColor[fOffset], fogAmount)
+				map, pixels, pitch, i, max(floorTop, s), h,
+				ApplyDistanceFog(floorColor[fOffset], fogAmount), z
 			);
 			if(floorTop < h)
 				hiddeny[i] = floorTop;
@@ -718,17 +726,26 @@ void Map_SetScreen(Map *map, void *screen) {
 		map->showny = NULL;
 	}
 #endif
+	if(map->depth) {
+		SDL_free(map->depth);
+		map->depth = NULL;
+	}
+	map->depthWidth = 0;
+	map->depthHeight = 0;
 	map->screen = screen;
 	if(!screen) return;
-	int width = 0;
-	if(SDL_QueryTexture(screen, NULL, NULL, &width, NULL) == 0) {
+	int width = 0, height = 0;
+	if(SDL_QueryTexture(screen, NULL, NULL, &width, &height) == 0) {
 #ifdef USE_AVX2
 		map->useAVX2 = SDL_HasAVX2();
 #endif
 		map->hiddeny = SDL_calloc(4, width);
 		map->showny = SDL_calloc(4, width);
+		map->depth = SDL_malloc((size_t)width * (size_t)height * sizeof(*map->depth));
+		map->depthWidth = width;
+		map->depthHeight = height;
 		map->redraw = 1;
-		if(!map->hiddeny || !map->showny) {
+		if(!map->hiddeny || !map->showny || !map->depth) {
 			SDL_LogCritical(0, "Failed to allocate screen line buffers");
 			exit(1);
 		}
@@ -777,6 +794,12 @@ void Map_SetScreen(Map *map, void *screen) {
 		SDL_LogCritical(0, "Failed to query screen texture");
 		exit(1);
 	}
+}
+
+float *Map_GetDepthBuffer(Map *map, int *width, int *height) {
+	if(width) *width = map->depthWidth;
+	if(height) *height = map->depthHeight;
+	return map->depth;
 }
 
 void Map_Close(Map *map) {

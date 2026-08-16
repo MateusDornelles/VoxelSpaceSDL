@@ -9,6 +9,7 @@
 #endif
 #include "camera.h"
 #include "map.h"
+#include "polygon_renderer.h"
 #ifdef USE_OPENGL_RENDER
 #include "opengl_renderer.h"
 #endif
@@ -191,10 +192,14 @@ static int SpawnScreen(void) {
 	SDL_GetWindowSize(ctx.wnd, &wndWidth, &wndHeight);
 #ifdef USE_OPENGL_RENDER
 	if(ctx.backend == RENDERER_OPENGL) {
-		SDL_GL_GetDrawableSize(ctx.wnd, &renderWidth, &renderHeight);
+		int outputWidth = 0, outputHeight = 0;
+		SDL_GL_GetDrawableSize(ctx.wnd, &outputWidth, &outputHeight);
+		renderWidth = ctx.integerScale > 1 ? max(outputWidth / ctx.integerScale, 1) : outputWidth;
+		renderHeight = ctx.integerScale > 1 ? max(outputHeight / ctx.integerScale, 1) : outputHeight;
 		if(ctx.camera.maxhorizon > 0.0f)
 			horizonRatio = ctx.camera.horizon / ctx.camera.maxhorizon;
-		OpenGLRenderer_Resize(renderWidth, renderHeight);
+		OpenGLRenderer_Resize(renderWidth, renderHeight,
+			outputWidth, outputHeight, ctx.integerScale);
 		ctx.camera.maxhorizon = (float)renderHeight;
 		ctx.camera.horizon = horizonRatio * ctx.camera.maxhorizon;
 		Camera_ClampPitch(&ctx.camera);
@@ -260,6 +265,7 @@ static int CreatePresentationBackend(int width, int height) {
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+		SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 		windowFlags |= SDL_WINDOW_OPENGL;
 	}
 #endif
@@ -352,6 +358,7 @@ int Engine_Start(EngineSettings *es) {
 			es->ceilingdiffusemap ? es->ceilingdiffusemap : es->diffusemap,
 			es->ceilingheightmap ? es->ceilingheightmap : es->heightmap
 		);
+	PolygonRenderer_Init(&ctx.map);
 
 	ctx.fps.sampleStart = SDL_GetPerformanceCounter();
 	ctx.fps.sampleFrames = 0;
@@ -422,6 +429,7 @@ int Engine_Update(void) {
 #endif
 	{
 	Map_Draw(&ctx.map, &ctx.camera);
+	PolygonRenderer_DrawSoftware(&ctx.map, &ctx.camera);
 
 	// Present our texture in the SDL window
 	SDL_RenderClear(ctx.render);
@@ -568,6 +576,7 @@ void Engine_Stop(void) {
 
 void Engine_End(void) {
 	DestroyPresentationBackend();
+	PolygonRenderer_Destroy();
 	Map_Close(&ctx.map);
 
 #ifdef USE_SDL_IMAGE
