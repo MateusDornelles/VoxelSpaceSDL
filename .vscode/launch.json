@@ -5,10 +5,10 @@
 			"name": "VoxelSpace Linux",
 			"type": "cppdbg",
 			"request": "launch",
-			"program": "${workspaceFolder}/out/vs",
+			"program": "${workspaceFolder}/build/bin/vs",
 			"args": [],
 			"stopAtEntry": false,
-			"cwd": "${workspaceFolder}/out",
+			"cwd": "${workspaceFolder}/build/bin",
 			"console": "integratedTerminal",
 			"preLaunchTask": "Build VoxelSpace"
 		},
@@ -16,10 +16,10 @@
 			"name": "VoxelSpace",
 			"type": "cppvsdbg",
 			"request": "launch",
-			"program": ".\\vs.exe",
+			"program": "${workspaceFolder}\\build\\bin\\vs.exe",
 			"args": [],
 			"stopAtEntry": false,
-			"cwd": "${workspaceFolder}\\out",
+			"cwd": "${workspaceFolder}\\build\\bin",
 			"environment": [
 				{"name": "path", "value": "..\\SDL2\\lib\\x64;..\\SDL2_Image\\lib\\x64;..\\SDL2_ttf\\lib\\x64"}
 			],

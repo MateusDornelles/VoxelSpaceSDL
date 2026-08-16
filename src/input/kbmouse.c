@@ -70,7 +70,7 @@ static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
 			map->redraw = 1;
 			break;
 		case SDL_SCANCODE_I:
-			Engine_ToggleIntegerScale2x();
+			Engine_CycleIntegerScale();
 			break;
 		case SDL_SCANCODE_RETURN:
 			if((mod & KMOD_ALT) != 0)

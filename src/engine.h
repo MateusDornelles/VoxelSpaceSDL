@@ -11,6 +11,7 @@ typedef struct sPoint {
 
 typedef struct sEngineSettings {
 	int vsync, width, height;
+	int integerScale;
 	int benchmarkSeconds;
 	char *diffusemap, *heightmap;
 	char *ceilingdiffusemap, *ceilingheightmap;
@@ -39,7 +40,7 @@ void Engine_Stop(void);
 void Engine_End(void);
 
 void Engine_ToggleFullscreen(void);
-void Engine_ToggleIntegerScale2x(void);
+void Engine_CycleIntegerScale(void);
 void *Engine_GetWindow(void);
 void Engine_GetObjects(Camera **cam, Map **map);
 float Engine_GetDeltaTime(void);

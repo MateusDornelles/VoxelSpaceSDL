@@ -31,7 +31,7 @@ struct sContext {
 	SDL_Window *wnd;
 	SDL_Renderer *render;
 	SDL_Texture *screen;
-	int integerScale2x;
+	int integerScale;
 	struct sListener {
 		void(*func)(void *);
 		struct sListener *next;
@@ -185,13 +185,17 @@ static int SpawnScreen(void) {
 	int renderWidth = 0, renderHeight = 0;
 	float horizonRatio = 0.5f;
 	SDL_GetWindowSize(ctx.wnd, &wndWidth, &wndHeight);
-	if(ctx.integerScale2x) {
-		renderWidth = max(wndWidth / 2, 1);
-		renderHeight = max(wndHeight / 2, 1);
+	if(ctx.integerScale > 1) {
+		renderWidth = max(wndWidth / ctx.integerScale, 1);
+		renderHeight = max(wndHeight / ctx.integerScale, 1);
 	} else {
 		renderWidth = wndWidth;
 		renderHeight = wndHeight;
 	}
+	SDL_Log(
+		"Render resolution: %dx%d, window: %dx%d, integer scale: %dx",
+		renderWidth, renderHeight, wndWidth, wndHeight, ctx.integerScale
+	);
 
 	if(ctx.camera.maxhorizon > 0.0f)
 		horizonRatio = ctx.camera.horizon / ctx.camera.maxhorizon;
@@ -244,9 +248,11 @@ int Engine_Start(EngineSettings *es) {
 	CompareSDLVersions("SDL TTF", &cver, TTF_Linked_Version());
 #endif
 
+	ctx.integerScale = es->integerScale;
 	if((ctx.wnd = SDL_CreateWindow(GRAPHICS_TITLE,
 		SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-		es->width, es->height, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
+		es->width * ctx.integerScale, es->height * ctx.integerScale,
+		SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
 	)) == NULL) {
 		SDL_LogCritical(0, "Failed to create SDL window: %s", SDL_GetError());
 		return 2;
@@ -360,15 +366,15 @@ int Engine_Update(void) {
 
 	// Present our texture in the SDL window
 	SDL_RenderClear(ctx.render);
-	if(ctx.integerScale2x) {
+	if(ctx.integerScale > 1) {
 		int wndWidth = 0, wndHeight = 0, renderWidth = 0, renderHeight = 0;
 		SDL_GetRendererOutputSize(ctx.render, &wndWidth, &wndHeight);
 		SDL_QueryTexture(ctx.screen, NULL, NULL, &renderWidth, &renderHeight);
 		SDL_Rect dst = {
 			.x = (wndWidth - (renderWidth * 2)) / 2,
 			.y = (wndHeight - (renderHeight * 2)) / 2,
-			.w = renderWidth * 2,
-			.h = renderHeight * 2
+			.w = renderWidth * ctx.integerScale,
+			.h = renderHeight * ctx.integerScale
 		};
 		SDL_RenderCopy(ctx.render, ctx.screen, NULL, &dst);
 	} else
@@ -426,9 +432,19 @@ void Engine_ToggleFullscreen(void) {
 	}
 }
 
-void Engine_ToggleIntegerScale2x(void) {
-	ctx.integerScale2x ^= 1;
-	SDL_Log("Integer 2x scaling: %s", ctx.integerScale2x ? "ON" : "OFF");
+void Engine_CycleIntegerScale(void) {
+	int renderWidth = GRAPHICS_WIDTH, renderHeight = GRAPHICS_HEIGHT;
+	if(ctx.screen)
+		SDL_QueryTexture(ctx.screen, NULL, NULL, &renderWidth, &renderHeight);
+
+	ctx.integerScale = (ctx.integerScale % 3) + 1;
+	SDL_Log("Integer scaling: %dx", ctx.integerScale);
+	if(!(SDL_GetWindowFlags(ctx.wnd) & SDL_WINDOW_FULLSCREEN_DESKTOP))
+		SDL_SetWindowSize(
+			ctx.wnd,
+			renderWidth * ctx.integerScale,
+			renderHeight * ctx.integerScale
+		);
 	if(SpawnScreen()) {
 		SDL_LogCritical(0, "Failed to create SDL texture: %s", SDL_GetError());
 		exit(1);

@@ -57,6 +57,11 @@ int CommandArgs_Parse(int argc, char *argv[], EngineSettings *es) {
 		} else if(TestArg(argstr, "winheight", "wh")) {
 			es->height = SDL_atoi(argv[cursor++]);
 			if(!es->height) return ShowHelp();
+		} else if(TestArg(argstr, "scale", "is")) {
+			if(cursor >= argc) return ShowHelp();
+			es->integerScale = SDL_atoi(argv[cursor++]);
+			if(es->integerScale < 1 || es->integerScale > 3)
+				return ShowHelp();
 		} else if(TestArg(argstr, "benchmark", "bm")) {
 			if(cursor < argc && argv[cursor] && argv[cursor][0] != '-' && argv[cursor][0] != '/')
 				es->benchmarkSeconds = SDL_atoi(argv[cursor++]);

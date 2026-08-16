@@ -3,23 +3,28 @@
 	"tasks": [
 		{
 			"type": "shell",
+			"label": "Configure VoxelSpace (Release)",
+			"command": "cmake",
+			"args": [
+				"-S", ".",
+				"-B", "build",
+				"-DCMAKE_BUILD_TYPE=Release",
+				"-DVOXEL_USE_THREADED_RENDER=ON",
+				"-DVOXEL_USE_AVX2=ON",
+				"-DVOXEL_USE_SDL_IMAGE=OFF",
+				"-DVOXEL_USE_OVERLAY=OFF"
+			],
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"type": "shell",
 			"label": "Build VoxelSpace",
-			"linux": {
-				"command": "./build.sh",
-				"args": ["dbg", "sdlimage","overlay", "threaded"],
-				"detail": "compiler: gcc-like",
-				"problemMatcher": [
-					"$gcc"
-				]
-			},
-			"windows": {
-				"command": ".\\build.bat",
-				"args": ["dbg", "sdlimage", "overlay", "threaded"],
-				"detail": "compiler: cl.exe",
-				"problemMatcher": [
-					"$msCompile"
-				]
-			},
+			"command": "cmake",
+			"args": ["--build", "build", "--config", "Release", "-j"],
+			"dependsOn": "Configure VoxelSpace (Release)",
 			"presentation": {
 				"echo": false,
 				"reveal": "silent",
@@ -37,39 +42,12 @@
 		},
 		{
 			"type": "shell",
-			"label": "Configure CMake",
-			"command": "cmake",
-			"args": [
-				"-S", ".", "-B", "build",
-				"-DCMAKE_BUILD_TYPE=Release",
-				"-DVOXEL_USE_THREADED_RENDER=OFF"
-			],
-			"problemMatcher": [],
-			"options": {
-				"cwd": "${workspaceFolder}"
-			}
-		},
-		{
-			"type": "shell",
-			"label": "Build VoxelSpace (CMake)",
-			"command": "cmake",
-			"args": ["--build", "build", "--config", "Release", "-j"],
-			"dependsOn": "Configure CMake",
-			"problemMatcher": [
-				"$gcc"
-			],
-			"options": {
-				"cwd": "${workspaceFolder}"
-			}
-		},
-		{
-			"type": "shell",
 			"label": "Run VoxelSpace",
 			"linux": {
-				"command": "./out/vs"
+				"command": "./build/bin/vs"
 			},
 			"windows": {
-				"command": ".\\out\\vs.exe"
+				"command": ".\\build\\bin\\vs.exe"
 			},
 			"problemMatcher": [],
 			"options": {
@@ -80,7 +58,7 @@
 			"label": "Build and Run VoxelSpace",
 			"dependsOrder": "sequence",
 			"dependsOn": [
-				"Build VoxelSpace (CMake)",
+				"Build VoxelSpace",
 				"Run VoxelSpace"
 			],
 			"problemMatcher": []
