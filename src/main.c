@@ -39,10 +39,10 @@ int main(int argc, char *argv[]) {
 		.integerScale = 1,
 		.benchmarkSeconds = 0,
 		.renderer = RENDERER_SOFTWARE,
-		.diffusemap = "maps/C1W.bmp",
-		.heightmap = "maps/D1.bmp",
-		.ceilingdiffusemap = "maps/C1W.bmp",
-		.ceilingheightmap = "maps/D1.bmp",
+		.diffusemap = "maps/h1w.bmp",
+		.heightmap = "maps/h1.bmp",
+		.ceilingdiffusemap = "maps/h1w.bmp",
+		.ceilingheightmap = "maps/h1.bmp",
 	};
 
 	if(CommandArgs_Parse(argc, argv, &es))

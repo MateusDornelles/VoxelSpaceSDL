@@ -430,8 +430,8 @@ int Engine_Update(void) {
 		SDL_GetRendererOutputSize(ctx.render, &wndWidth, &wndHeight);
 		SDL_QueryTexture(ctx.screen, NULL, NULL, &renderWidth, &renderHeight);
 		SDL_Rect dst = {
-			.x = (wndWidth - (renderWidth * 2)) / 2,
-			.y = (wndHeight - (renderHeight * 2)) / 2,
+			.x = (wndWidth - (renderWidth * ctx.integerScale)) / 2,
+			.y = (wndHeight - (renderHeight * ctx.integerScale)) / 2,
 			.w = renderWidth * ctx.integerScale,
 			.h = renderHeight * ctx.integerScale
 		};

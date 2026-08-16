@@ -38,8 +38,8 @@ if(EMSCRIPTEN)
 		"SHELL:-s USE_SDL=2"
 		"SHELL:-s SINGLE_FILE=1"
 		"SHELL:-s ALLOW_MEMORY_GROWTH=1"
-		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/out/maps/C1W.bmp@maps/C1W.bmp"
-		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/out/maps/D1.bmp@maps/D1.bmp"
+		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/maps/h1w.bmp@maps/h1w.bmp"
+		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/maps/h1.bmp@maps/h1.bmp"
 	)
 	set_target_properties(vs PROPERTIES SUFFIX ".html")
 else()
@@ -109,7 +109,7 @@ set_target_properties(vs PROPERTIES
 
 add_custom_command(TARGET vs POST_BUILD
 	COMMAND "${CMAKE_COMMAND}" -E copy_directory
-		"${CMAKE_CURRENT_SOURCE_DIR}/out/maps"
+		"${CMAKE_CURRENT_SOURCE_DIR}/maps"
 		"$<TARGET_FILE_DIR:vs>/maps"
 	COMMENT "Copying map assets beside the executable"
 )

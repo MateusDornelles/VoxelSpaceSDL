@@ -65,63 +65,6 @@
 		},
 		{
 			"type": "shell",
-			"label": "Configure VoxelSpace (OpenGL 3.3)",
-			"command": "cmake",
-			"args": [
-				"-S", ".",
-				"-B", "build-gl",
-				"-DCMAKE_BUILD_TYPE=Release",
-				"-DVOXEL_USE_OVERLAY=OFF"
-			],
-			"problemMatcher": [],
-			"options": {
-				"cwd": "${workspaceFolder}"
-			}
-		},
-		{
-			"type": "shell",
-			"label": "Build VoxelSpace (OpenGL 3.3)",
-			"command": "cmake",
-			"args": ["--build", "build-gl", "--config", "Release", "-j"],
-			"dependsOn": "Configure VoxelSpace (OpenGL 3.3)",
-			"problemMatcher": ["$gcc"],
-			"options": {
-				"cwd": "${workspaceFolder}"
-			},
-			"presentation": {
-				"echo": false,
-				"reveal": "silent",
-				"panel": "shared",
-				"showReuseMessage": false,
-				"clear": true
-			}
-		},
-		{
-			"type": "shell",
-			"label": "Run VoxelSpace (OpenGL 3.3)",
-			"linux": {
-				"command": "./build-gl/bin/vs"
-			},
-			"windows": {
-				"command": ".\\build-gl\\bin\\vs.exe"
-			},
-			"args": ["-renderer", "opengl"],
-			"problemMatcher": [],
-			"options": {
-				"cwd": "${workspaceFolder}"
-			}
-		},
-		{
-			"label": "Build and Run VoxelSpace (OpenGL 3.3)",
-			"dependsOrder": "sequence",
-			"dependsOn": [
-				"Build VoxelSpace (OpenGL 3.3)",
-				"Run VoxelSpace (OpenGL 3.3)"
-			],
-			"problemMatcher": []
-		},
-		{
-			"type": "shell",
 			"label": "Configure VoxelSpace (WASM)",
 			"command": "emcmake",
 			"args": [
