@@ -39,10 +39,15 @@ static inline void Camera_StrafeVert(Camera *cam, float spd) {
 	cam->height += spd * CAMERA_MOVE_STEP;
 }
 
+static inline void Camera_ClampPitch(Camera *cam) {
+	const float center = cam->maxhorizon * 0.5f;
+	const float extent = (cam->maxhorizon / CAMERA_PROJECTION_SCALE) * SDL_tanf(CAMERA_MAX_PITCH);
+	cam->horizon = max(center - extent, min(cam->horizon, center + extent));
+}
+
 static inline void Camera_Pitch(Camera *cam, float spd) {
 	cam->horizon -= spd * cam->maxhorizon * CAMERA_HORIZON_STEP;
-	// Clamp the camera horizon to window dimensions
-	cam->horizon = max(-cam->maxhorizon, min(cam->horizon, cam->maxhorizon));
+	Camera_ClampPitch(cam);
 }
 
 static inline void Camera_ResetPitch(Camera *cam) {

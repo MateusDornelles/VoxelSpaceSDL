@@ -9,6 +9,9 @@
 #endif
 #include "camera.h"
 #include "map.h"
+#ifdef USE_OPENGL_RENDER
+#include "opengl_renderer.h"
+#endif
 
 struct sContext {
 	Uint64 lastTime, currTime;
@@ -31,7 +34,8 @@ struct sContext {
 	SDL_Window *wnd;
 	SDL_Renderer *render;
 	SDL_Texture *screen;
-	int integerScale;
+	RendererBackend backend;
+	int integerScale, vsync;
 	struct sListener {
 		void(*func)(void *);
 		struct sListener *next;
@@ -176,7 +180,7 @@ static inline void UpdateBenchmarkCamera(void) {
 	ctx.camera.position.y = ctx.benchmark.basePosition.y + SDL_cosf(t * 1.1f) * 160.0f;
 	ctx.camera.height = ctx.benchmark.baseHeight + SDL_sinf(t * 0.5f) * 18.0f;
 	ctx.camera.horizon = ctx.benchmark.baseHorizon + SDL_sinf(t * 0.8f) * (ctx.camera.maxhorizon * 0.08f);
-	ctx.camera.horizon = max(-ctx.camera.maxhorizon, min(ctx.camera.horizon, ctx.camera.maxhorizon));
+	Camera_ClampPitch(&ctx.camera);
 	ctx.map.redraw = 1;
 }
 
@@ -185,6 +189,19 @@ static int SpawnScreen(void) {
 	int renderWidth = 0, renderHeight = 0;
 	float horizonRatio = 0.5f;
 	SDL_GetWindowSize(ctx.wnd, &wndWidth, &wndHeight);
+#ifdef USE_OPENGL_RENDER
+	if(ctx.backend == RENDERER_OPENGL) {
+		SDL_GL_GetDrawableSize(ctx.wnd, &renderWidth, &renderHeight);
+		if(ctx.camera.maxhorizon > 0.0f)
+			horizonRatio = ctx.camera.horizon / ctx.camera.maxhorizon;
+		OpenGLRenderer_Resize(renderWidth, renderHeight);
+		ctx.camera.maxhorizon = (float)renderHeight;
+		ctx.camera.horizon = horizonRatio * ctx.camera.maxhorizon;
+		Camera_ClampPitch(&ctx.camera);
+		ctx.map.redraw = 1;
+		return 0;
+	}
+#endif
 	if(ctx.integerScale > 1) {
 		renderWidth = max(wndWidth / ctx.integerScale, 1);
 		renderHeight = max(wndHeight / ctx.integerScale, 1);
@@ -213,12 +230,79 @@ static int SpawnScreen(void) {
 #endif
 	ctx.camera.maxhorizon = (float)renderHeight;
 	ctx.camera.horizon = horizonRatio * ctx.camera.maxhorizon;
-	ctx.camera.horizon = max(-ctx.camera.maxhorizon, min(ctx.camera.horizon, ctx.camera.maxhorizon));
+	Camera_ClampPitch(&ctx.camera);
 	Map_SetScreen(&ctx.map, ctx.screen);
 	return 0;
 }
 
+static void DestroyPresentationBackend(void) {
+	if(ctx.backend == RENDERER_SOFTWARE) {
+		Map_SetScreen(&ctx.map, NULL);
+		if(ctx.screen) SDL_DestroyTexture(ctx.screen);
+		if(ctx.render) SDL_DestroyRenderer(ctx.render);
+		ctx.screen = NULL;
+		ctx.render = NULL;
+	}
+#ifdef USE_OPENGL_RENDER
+	else {
+		OpenGLRenderer_Destroy();
+	}
+#endif
+	if(ctx.wnd) SDL_DestroyWindow(ctx.wnd);
+	ctx.wnd = NULL;
+}
+
+static int CreatePresentationBackend(int width, int height) {
+	Uint32 windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+#ifdef USE_OPENGL_RENDER
+	if(ctx.backend == RENDERER_OPENGL) {
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+		windowFlags |= SDL_WINDOW_OPENGL;
+	}
+#endif
+	ctx.wnd = SDL_CreateWindow(GRAPHICS_TITLE,
+		SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+		width, height, windowFlags);
+	if(!ctx.wnd) {
+		SDL_LogCritical(0, "Failed to create SDL window: %s", SDL_GetError());
+		return 2;
+	}
+	Engine_CallListeners(LISTEN_SDL_WINDOW, ctx.wnd);
+
+#ifdef USE_OPENGL_RENDER
+	if(ctx.backend == RENDERER_OPENGL) {
+		SDL_SetWindowTitle(ctx.wnd, "VoxelSpace SDL (OpenGL 3.3)");
+		if(OpenGLRenderer_Init(ctx.wnd, ctx.vsync) != 0)
+			return 3;
+	} else
+#endif
+	{
+		Uint32 rendererFlags = SDL_RENDERER_TARGETTEXTURE;
+		if(ctx.vsync) rendererFlags |= SDL_RENDERER_PRESENTVSYNC;
+		ctx.render = SDL_CreateRenderer(ctx.wnd, -1, rendererFlags);
+		if(!ctx.render) {
+			SDL_LogCritical(0, "Failed to create SDL renderer: %s", SDL_GetError());
+			return 3;
+		}
+		SDL_RendererInfo info;
+		if(SDL_GetRendererInfo(ctx.render, &info) == 0)
+			SDL_Log("Using %s %s renderer",
+				info.flags & SDL_RENDERER_ACCELERATED ? "hardware" : "software", info.name);
+	}
+	return SpawnScreen() ? 4 : 0;
+}
+
 int Engine_Start(EngineSettings *es) {
+	ctx.backend = es->renderer;
+#ifndef USE_OPENGL_RENDER
+	if(ctx.backend == RENDERER_OPENGL) {
+		SDL_LogCritical(0, "OpenGL renderer is not available in this build");
+		return 1;
+	}
+#endif
 	SDL_SetMainReady();
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
 	// Initialize SDL
@@ -249,34 +333,7 @@ int Engine_Start(EngineSettings *es) {
 #endif
 
 	ctx.integerScale = es->integerScale;
-	if((ctx.wnd = SDL_CreateWindow(GRAPHICS_TITLE,
-		SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-		es->width * ctx.integerScale, es->height * ctx.integerScale,
-		SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
-	)) == NULL) {
-		SDL_LogCritical(0, "Failed to create SDL window: %s", SDL_GetError());
-		return 2;
-	}
-	Engine_CallListeners(LISTEN_SDL_WINDOW, ctx.wnd);
-
-	/*
-		Find a renderer that matches
-		our rendering requirements.
-	*/
-	Uint32 rflags = SDL_RENDERER_TARGETTEXTURE;
-	if(es->vsync) rflags |= SDL_RENDERER_PRESENTVSYNC;
-
-	if((ctx.render = SDL_CreateRenderer(ctx.wnd, -1, rflags)) == NULL) {
-		SDL_LogCritical(0, "Failed to create SDL renderer: %s", SDL_GetError());
-		return 3;
-	} else {
-		SDL_RendererInfo ri;
-		if(SDL_GetRendererInfo(ctx.render, &ri) == 0)
-			SDL_Log("Using %s %s renderer", ri.flags & SDL_RENDERER_ACCELERATED ? "hardware" : "software", ri.name);
-		else
-			SDL_LogError(0, "Failed to retrieve SDL renderer info: %s", SDL_GetError());
-	}
-
+	ctx.vsync = es->vsync;
 #ifdef USE_THREADED_RENDER
 	/*
 		Set the number of threads used for rendering.
@@ -284,15 +341,9 @@ int Engine_Start(EngineSettings *es) {
 	*/
 	ctx.map.rctxcnt = es->numthreads;
 #endif
-
-	/*
-		Create a texture that stores
-		the most recently rendered frame.
-	*/
-	if(SpawnScreen()) {
-		SDL_LogCritical(0, "Failed to create SDL texture: %s", SDL_GetError());
-		return 4;
-	}
+	int backendResult = CreatePresentationBackend(
+		es->width * ctx.integerScale, es->height * ctx.integerScale);
+	if(backendResult != 0) return backendResult;
 
 	if(es->diffusemap && es->heightmap)
 		Map_OpenDual(
@@ -362,6 +413,14 @@ int Engine_Update(void) {
 	UpdateBenchmarkCamera();
 
 	// Redraw the world
+#ifdef USE_OPENGL_RENDER
+	if(ctx.backend == RENDERER_OPENGL) {
+		OpenGLRenderer_Draw(&ctx.map, &ctx.camera);
+		OpenGLRenderer_DrawFPS(ctx.fps.value);
+		OpenGLRenderer_Present(ctx.wnd);
+	} else
+#endif
+	{
 	Map_Draw(&ctx.map, &ctx.camera);
 
 	// Present our texture in the SDL window
@@ -382,6 +441,7 @@ int Engine_Update(void) {
 	Engine_CallListeners(LISTEN_ENGINE_DRAW, ctx.render);
 	DrawFPSCounter();
 	SDL_RenderPresent(ctx.render);
+	}
 
 	ctx.fps.sampleFrames++;
 	if(ctx.fps.sampleStart > 0) {
@@ -420,6 +480,44 @@ int Engine_Update(void) {
 		ctx.deltaTime = max(0.1f, min(ctx.deltaTime, 1000.0f));
 	}
 	return 1;
+}
+
+void Engine_ToggleRenderer(void) {
+#ifdef USE_OPENGL_RENDER
+	const RendererBackend previous = ctx.backend;
+	const RendererBackend next = previous == RENDERER_SOFTWARE ?
+		RENDERER_OPENGL : RENDERER_SOFTWARE;
+	int width = GRAPHICS_WIDTH, height = GRAPHICS_HEIGHT;
+	int x = SDL_WINDOWPOS_CENTERED, y = SDL_WINDOWPOS_CENTERED;
+	const int wasFullscreen = (SDL_GetWindowFlags(ctx.wnd) & SDL_WINDOW_FULLSCREEN) != 0;
+	SDL_GetWindowSize(ctx.wnd, &width, &height);
+	SDL_GetWindowPosition(ctx.wnd, &x, &y);
+
+	DestroyPresentationBackend();
+	ctx.backend = next;
+	int result = CreatePresentationBackend(width, height);
+	if(result != 0) {
+		SDL_LogError(0, "Failed to switch renderer; restoring previous backend");
+		DestroyPresentationBackend();
+		ctx.backend = previous;
+		result = CreatePresentationBackend(width, height);
+		if(result != 0) {
+			SDL_LogCritical(0, "Failed to restore renderer backend");
+			ctx.stopped = 1;
+			return;
+		}
+	}
+
+	SDL_SetWindowPosition(ctx.wnd, x, y);
+	if(wasFullscreen) {
+		SDL_SetWindowFullscreen(ctx.wnd, SDL_WINDOW_FULLSCREEN_DESKTOP);
+		SpawnScreen();
+	}
+	ctx.map.redraw = 1;
+	SDL_Log("Renderer switched to %s", ctx.backend == RENDERER_OPENGL ? "OpenGL 3.3" : "software");
+#else
+	SDL_LogWarn(0, "OpenGL renderer is not available in this build");
+#endif
 }
 
 void Engine_ToggleFullscreen(void) {
@@ -469,22 +567,8 @@ void Engine_Stop(void) {
 }
 
 void Engine_End(void) {
-	// Stop render workers before releasing the texture they may reference.
-	Map_SetScreen(&ctx.map, NULL);
+	DestroyPresentationBackend();
 	Map_Close(&ctx.map);
-
-	if(ctx.screen) {
-		SDL_DestroyTexture(ctx.screen);
-		ctx.screen = NULL;
-	}
-	if(ctx.render) {
-		SDL_DestroyRenderer(ctx.render);
-		ctx.render = NULL;
-	}
-	if(ctx.wnd) {
-		SDL_DestroyWindow(ctx.wnd);
-		ctx.wnd = NULL;
-	}
 
 #ifdef USE_SDL_IMAGE
 	IMG_Quit();

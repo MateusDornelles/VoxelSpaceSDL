@@ -38,6 +38,7 @@ int main(int argc, char *argv[]) {
 		.height = GRAPHICS_HEIGHT,
 		.integerScale = 1,
 		.benchmarkSeconds = 0,
+		.renderer = RENDERER_SOFTWARE,
 		.diffusemap = "maps/C1W.bmp",
 		.heightmap = "maps/D1.bmp",
 		.ceilingdiffusemap = "maps/C1W.bmp",

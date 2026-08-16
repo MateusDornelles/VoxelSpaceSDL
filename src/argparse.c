@@ -68,6 +68,14 @@ int CommandArgs_Parse(int argc, char *argv[], EngineSettings *es) {
 			else
 				es->benchmarkSeconds = 10;
 			if(es->benchmarkSeconds <= 0) return ShowHelp();
+		} else if(TestArg(argstr, "renderer", "r")) {
+			if(cursor >= argc) return ShowHelp();
+			const char *renderer = argv[cursor++];
+			if(SDL_strcasecmp(renderer, "software") == 0 || SDL_strcasecmp(renderer, "sw") == 0)
+				es->renderer = RENDERER_SOFTWARE;
+			else if(SDL_strcasecmp(renderer, "opengl") == 0 || SDL_strcasecmp(renderer, "gl") == 0)
+				es->renderer = RENDERER_OPENGL;
+			else return ShowHelp();
 #ifdef USE_THREADED_RENDER
 		} else if(TestArg(argstr, "numthreads", "nt")) {
 			es->numthreads = SDL_atoi(argv[cursor++]);

@@ -9,10 +9,16 @@ typedef struct sPoint {
 #include "map.h"
 #include "camera.h"
 
+typedef enum eRendererBackend {
+	RENDERER_SOFTWARE,
+	RENDERER_OPENGL
+} RendererBackend;
+
 typedef struct sEngineSettings {
 	int vsync, width, height;
 	int integerScale;
 	int benchmarkSeconds;
+	RendererBackend renderer;
 	char *diffusemap, *heightmap;
 	char *ceilingdiffusemap, *ceilingheightmap;
 #ifdef USE_THREADED_RENDER
@@ -40,6 +46,7 @@ void Engine_Stop(void);
 void Engine_End(void);
 
 void Engine_ToggleFullscreen(void);
+void Engine_ToggleRenderer(void);
 void Engine_CycleIntegerScale(void);
 void *Engine_GetWindow(void);
 void Engine_GetObjects(Camera **cam, Map **map);

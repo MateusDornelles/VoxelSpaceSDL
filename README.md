@@ -26,6 +26,7 @@ Comanche's Voxel Space rendering algorithm written in C using SDL. You can try i
 * Shift + Space - Decrease render distance
 * LCTRL + Space - Reset render distance to default value
 * Alt + Enter - Toggle fullscreen
+* F10 - Switch between software and OpenGL rendering
 
 ### Game Controller
 
@@ -44,6 +45,25 @@ Comanche's Voxel Space rendering algorithm written in C using SDL. You can try i
 * Touchpad - Free look
 
 ## Building
+
+### Rendering backends
+
+Desktop builds include both the SDL software renderer and the OpenGL 3.3 Core
+renderer. The software backend is the default; select either backend when the
+program starts:
+
+```sh
+./build/bin/vs -renderer software
+./build/bin/vs -renderer opengl
+```
+
+The OpenGL backend lives in `src/opengl_renderer.c` and does not replace or
+modify the software map renderer. Short forms `-r sw` and `-r gl` are also
+accepted. Emscripten builds provide the software backend only, and the SDL_ttf
+overlay is shown only by the software backend.
+
+Press `F10` while the program is running to switch backends. The map, camera,
+window size and fullscreen state are preserved.
 
 ### Arguments supported by build scripts
 

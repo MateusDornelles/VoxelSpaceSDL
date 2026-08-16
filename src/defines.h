@@ -38,6 +38,8 @@
 #define CAMERA_MOVE_STEP 4.0f // Camera movement speed
 #define CAMERA_ANGLE_STEP 0.08f // Camera rotation step
 #define CAMERA_HORIZON_STEP 0.0383f // Camera pitch adjustment step
+#define CAMERA_PROJECTION_SCALE 2.5f // Vertical projection divisor used by the renderer
+#define CAMERA_MAX_PITCH 0.78539816339f // Maximum look angle: 45 degrees in radians
 #define CAMERA_HEIGHT_DEFAULT 178.0f // Default camera height
 #define CAMERA_EYE_HEIGHT 9.0f // Eye position above the terrain
 #define CAMERA_HEIGHT_MAX 30000.0f // Maximum camera height

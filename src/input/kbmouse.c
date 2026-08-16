@@ -66,6 +66,9 @@ static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
 		case SDL_SCANCODE_I:
 			Engine_CycleIntegerScale();
 			break;
+		case SDL_SCANCODE_F10:
+			Engine_ToggleRenderer();
+			break;
 		case SDL_SCANCODE_RETURN:
 			if((mod & KMOD_ALT) != 0)
 				Engine_ToggleFullscreen();
@@ -133,5 +136,6 @@ static void ProcessMouseMotion(Sint32 rx, Sint32 ry) {
 	Engine_GetObjects(&cam, &map);
 	cam->angle -= (float)rx * INPUT_MOUSE_SENS;
 	cam->horizon -= (float)ry * cam->maxhorizon * INPUT_MOUSE_SENS;
+	Camera_ClampPitch(cam);
 	map->redraw = 1;
 }
