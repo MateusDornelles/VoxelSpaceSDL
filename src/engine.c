@@ -321,8 +321,8 @@ int Engine_Start(EngineSettings *es) {
 #ifdef USE_SDL_IMAGE
 	SDL_IMAGE_VERSION(&cver);
 	CompareSDLVersions("SDL Image", &cver, IMG_Linked_Version());
-	if(IMG_Init(IMG_INIT_JPG | IMG_INIT_PNG) < 0) {
-		SDL_LogCritical(0, "Failed to init SDL2_image: %s.", IMG_GetError());
+	if((IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) == 0) {
+		SDL_LogCritical(0, "Failed to initialize PNG support: %s.", IMG_GetError());
 		return 1;
 	}
 #endif

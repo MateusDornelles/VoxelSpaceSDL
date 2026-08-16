@@ -11,7 +11,7 @@
 				"-DCMAKE_BUILD_TYPE=Release",
 				"-DVOXEL_USE_THREADED_RENDER=ON",
 				"-DVOXEL_USE_AVX2=ON",
-				"-DVOXEL_USE_SDL_IMAGE=OFF",
+				"-DVOXEL_USE_SDL_IMAGE=ON",
 				"-DVOXEL_USE_OVERLAY=OFF"
 			],
 			"problemMatcher": [],
@@ -74,7 +74,7 @@
 				"-DCMAKE_BUILD_TYPE=Release",
 				"-DVOXEL_USE_THREADED_RENDER=OFF",
 				"-DVOXEL_USE_AVX2=OFF",
-				"-DVOXEL_USE_SDL_IMAGE=OFF",
+				"-DVOXEL_USE_SDL_IMAGE=ON",
 				"-DVOXEL_USE_OVERLAY=OFF"
 			],
 			"problemMatcher": [],

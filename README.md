@@ -73,15 +73,15 @@ window size and fullscreen state are preserved.
 * ``woff`` - Disable all compiler warnings;
 * ``threaded`` - Build with multithreaded renderer;
 * ``avx2`` - Build with AVX2 optimizations (x86_64 native builds only);
-* ``sdlimage`` - Build with png/jpg/... images support;
+* ``sdlimage`` - Explicitly enable SDL2_image support (BMP and PNG; enabled by default);
 * ``overlay`` - Build with onscreen information module;
 * ``web`` - Build for browsers using [emscripten](https://emscripten.org/);
 * ``run`` - Run compiled app if build successful.
 
 ### Build scripts usage
 
-* On Windows you need to run the ``build.bat`` batch script in Visual Studio Developer Environment. Or... just open Visual Studio Code and press F5 button. If you need png image support, run ``build.bat sdlimage``.
-* On Linux you need to run the ``build.sh`` bash script. If you need png image support, run ``build.sh sdlimage``;
+* On Windows you need to run the ``build.bat`` batch script in Visual Studio Developer Environment. Or... just open Visual Studio Code and press F5 button.
+* On Linux you need to run the ``build.sh`` bash script;
 * Almost all build agrguments can be combined.
 
 ## Notes

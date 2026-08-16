@@ -1,6 +1,6 @@
 @echo off
 setlocal enableextensions enabledelayedexpansion
-set VOXEL_USE_SDLIMAGE=0
+set VOXEL_USE_SDLIMAGE=1
 set VOXEL_OUTDIR=out
 set VOXEL_OUTFILE=vs.exe
 set VOXEL_EMSCRIPTEN=0
