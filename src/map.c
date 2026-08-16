@@ -208,6 +208,27 @@ static inline int ApplyDistanceFog(int color, int amount) {
 	return (int)(rb | ag);
 }
 
+static inline float SampleHeightBilinear(
+	const unsigned char *altitude, float x, float y, int mask, int shift
+) {
+	int x0 = (int)x;
+	int y0 = (int)y;
+	float fx = x - (float)x0;
+	float fy = y - (float)y0;
+	if(fx < 0.0f) { x0--; fx += 1.0f; }
+	if(fy < 0.0f) { y0--; fy += 1.0f; }
+
+	const int x1 = x0 + 1;
+	const int y1 = y0 + 1;
+	const float h00 = (float)altitude[((y0 & mask) << shift) + (x0 & mask)];
+	const float h10 = (float)altitude[((y0 & mask) << shift) + (x1 & mask)];
+	const float h01 = (float)altitude[((y1 & mask) << shift) + (x0 & mask)];
+	const float h11 = (float)altitude[((y1 & mask) << shift) + (x1 & mask)];
+	const float top = h00 + (h10 - h00) * fx;
+	const float bottom = h01 + (h11 - h01) * fx;
+	return top + (bottom - top) * fy;
+}
+
 static inline float NextDepthStep(
 	float current, float z, float distance, float zstep,
 	int optimize, float optdist
@@ -271,7 +292,9 @@ static void DrawFromToFloorOnly(Map *map, Camera *cam, int *pixels, int pitch, i
 			hasVisibleColumns = 1;
 
 			const int offset = ((((int)py & mapMask) << mapShift) + ((int)px & mapMask));
-			const int floorTop = (int)((camHeight - (float)altitude[offset]) * invz + camHorizon);
+			const float sampledHeight = SampleHeightBilinear(
+				altitude, px, py, mapMask, mapShift);
+			const int floorTop = (int)((camHeight - sampledHeight) * invz + camHorizon);
 			DrawVerticalLine(
 				pixels, pitch, i, floorTop, h,
 				ApplyDistanceFog(color[offset], fogAmount)
@@ -344,16 +367,20 @@ static void DrawFromToFloorOnlyAVX2(Map *map, Camera *cam, int *pixels, int pitc
 			const __m256i offsetv = _mm256_add_epi32(_mm256_sllv_epi32(iy, shiftv), ix);
 			const __m256i colorv = _mm256_i32gather_epi32(color, offsetv, sizeof(int));
 
-			int offsets[8], tops[8], hiddens[8], colors[8], alts[8];
+			int offsets[8], tops[8], hiddens[8], colors[8];
+			float sampleXs[8], sampleYs[8], alts[8];
 			_mm256_storeu_si256((__m256i *)(void *)offsets, offsetv);
 			_mm256_storeu_si256((__m256i *)(void *)hiddens, hiddenv);
 			_mm256_storeu_si256((__m256i *)(void *)colors, colorv);
+			_mm256_storeu_ps(sampleXs, lanePx);
+			_mm256_storeu_ps(sampleYs, lanePy);
 			for(int lane = 0; lane < 8; lane++)
-				alts[lane] = (int)altitude[offsets[lane]];
+				alts[lane] = SampleHeightBilinear(
+					altitude, sampleXs[lane], sampleYs[lane], mapMask, mapShift);
 
-			const __m256i altv = _mm256_setr_epi32(alts[0], alts[1], alts[2], alts[3], alts[4], alts[5], alts[6], alts[7]);
+			const __m256 altv = _mm256_loadu_ps(alts);
 			const __m256 floorTopf = _mm256_add_ps(
-				_mm256_mul_ps(_mm256_sub_ps(camHeightv, _mm256_cvtepi32_ps(altv)), invzv),
+				_mm256_mul_ps(_mm256_sub_ps(camHeightv, altv), invzv),
 				camHorizonv
 			);
 			const __m256i floorTopv = _mm256_cvttps_epi32(floorTopf);
@@ -383,7 +410,9 @@ static void DrawFromToFloorOnlyAVX2(Map *map, Camera *cam, int *pixels, int pitc
 			const float lanePx = px + dx * (float)(i - start);
 			const float lanePy = py + dy * (float)(i - start);
 			const int offset = ((((int)lanePy & mapMask) << mapShift) + ((int)lanePx & mapMask));
-			const int floorTop = (int)((camHeight - (float)altitude[offset]) * invz + camHorizon);
+			const float sampledHeight = SampleHeightBilinear(
+				altitude, lanePx, lanePy, mapMask, mapShift);
+			const int floorTop = (int)((camHeight - sampledHeight) * invz + camHorizon);
 			DrawVerticalLine(
 				pixels, pitch, i, floorTop, h,
 				ApplyDistanceFog(color[offset], fogAmount)
@@ -445,7 +474,9 @@ static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pi
 			const int sampleX = (int)px;
 			const int sampleY = (int)py;
 			const int cOffset = (((sampleY & ceilMask) << ceilShift) + (sampleX & ceilMask));
-			const int cBottom = (int)((camHeight - (ceilingBase - (float)ceilingAltitude[cOffset])) * invz + camHorizon);
+			const float sampledCeilingHeight = SampleHeightBilinear(
+				ceilingAltitude, px, py, ceilMask, ceilShift);
+			const int cBottom = (int)((camHeight - (ceilingBase - sampledCeilingHeight)) * invz + camHorizon);
 			DrawVerticalLine(
 				pixels, pitch, i, s, min(cBottom, h),
 				ApplyDistanceFog(ceilingColor[cOffset], fogAmount)
@@ -458,7 +489,9 @@ static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pi
 
 			const int fOffset = sameLayout ? cOffset :
 				(((sampleY & floorMask) << floorShift) + (sampleX & floorMask));
-			const int floorTop = (int)((camHeight - (float)floorAltitude[fOffset]) * invz + camHorizon);
+			const float sampledFloorHeight = SampleHeightBilinear(
+				floorAltitude, px, py, floorMask, floorShift);
+			const int floorTop = (int)((camHeight - sampledFloorHeight) * invz + camHorizon);
 			DrawVerticalLine(
 				pixels, pitch, i, max(floorTop, s), h,
 				ApplyDistanceFog(floorColor[fOffset], fogAmount)

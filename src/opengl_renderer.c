@@ -45,10 +45,10 @@ static int CreatePipelines(void){
 		"for(int i=0;i<4096;i++){if(z>=distance)break;float dx=2.*c*z/resolution.x,dy=-2.*s*z/resolution.x;\n"
 		"float px=(-c-s)*z+cameraPosition.x+dx*sx,py=(s-c)*z+cameraPosition.y+dy*sx;\n"
 		"ivec2 fp=ivec2(int(px)&(floorSize-1),int(py)&(floorSize-1));\n"
-		"float a=texelFetch(floorHeight,fp,0).r*255.;float ft=(cameraHeight-a)*scale/z+horizon;\n"
+		"vec2 fhp=(vec2(px,py)+.5)/float(floorSize);float a=texture(floorHeight,fhp).r*255.;float ft=(cameraHeight-a)*scale/z+horizon;\n"
 		"if(sy>=ft){outColor=vec4(fog(texelFetch(floorColor,fp,0).rgb,z),1);return;}\n"
 		"if(ceilingEnabled!=0){ivec2 cp=ivec2(int(px)&(ceilingSize-1),int(py)&(ceilingSize-1));\n"
-		"float ca=texelFetch(ceilingHeight,cp,0).r*255.;float cb=(cameraHeight-(ceilingBase-ca))*scale/z+horizon;\n"
+		"vec2 chp=(vec2(px,py)+.5)/float(ceilingSize);float ca=texture(ceilingHeight,chp).r*255.;float cb=(cameraHeight-(ceilingBase-ca))*scale/z+horizon;\n"
 		"if(sy<=cb){outColor=vec4(fog(texelFetch(ceilingColor,cp,0).rgb,z),1);return;}}\n"
 		"dz+=zstep;float ls=distance*.5;if(z>ls)dz+=zstep*(z/2.)*.35*smoothstep(0.,1.,(z-ls)/(distance-ls));\n"
 		"if(optimize!=0&&z>optimizeDistance)dz+=zstep*(z/2.);z+=dz;}\n"
@@ -65,18 +65,18 @@ static int CreatePipelines(void){
 	glBindVertexArray(0); glr.uiResolution=glGetUniformLocation(glr.uiProgram,"resolution"); glGenTextures(4,glr.tex); return 1;
 }
 
-static void Upload(GLuint texture,GLint internal,GLenum format,int width,const void *pixels){
-	glBindTexture(GL_TEXTURE_2D,texture); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_REPEAT);
+static void Upload(GLuint texture,GLint internal,GLenum format,GLint filter,int width,const void *pixels){
+	glBindTexture(GL_TEXTURE_2D,texture); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,filter);
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,filter); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_REPEAT); glPixelStorei(GL_UNPACK_ALIGNMENT,1);
 	glTexImage2D(GL_TEXTURE_2D,0,internal,width,width,0,format,GL_UNSIGNED_BYTE,pixels);
 }
 static void SyncTextures(Map *m){
 	if(glr.data[0]!=m->color||glr.data[1]!=m->altitude||glr.floorWidth!=m->width){
-		Upload(glr.tex[0],GL_RGBA8,GL_BGRA,m->width,m->color); Upload(glr.tex[1],GL_R8,GL_RED,m->width,m->altitude);
+		Upload(glr.tex[0],GL_RGBA8,GL_BGRA,GL_NEAREST,m->width,m->color); Upload(glr.tex[1],GL_R8,GL_RED,GL_LINEAR,m->width,m->altitude);
 		glr.data[0]=m->color;glr.data[1]=m->altitude;glr.floorWidth=m->width;}
 	if(m->ceilingReady&&(glr.data[2]!=m->ceilingColor||glr.data[3]!=m->ceilingAltitude||glr.ceilingWidth!=m->ceilingWidth)){
-		Upload(glr.tex[2],GL_RGBA8,GL_BGRA,m->ceilingWidth,m->ceilingColor);Upload(glr.tex[3],GL_R8,GL_RED,m->ceilingWidth,m->ceilingAltitude);
+		Upload(glr.tex[2],GL_RGBA8,GL_BGRA,GL_NEAREST,m->ceilingWidth,m->ceilingColor);Upload(glr.tex[3],GL_R8,GL_RED,GL_LINEAR,m->ceilingWidth,m->ceilingAltitude);
 		glr.data[2]=m->ceilingColor;glr.data[3]=m->ceilingAltitude;glr.ceilingWidth=m->ceilingWidth;}
 }
 static void U1f(const char*n,float v){glUniform1f(glGetUniformLocation(glr.mapProgram,n),v);}
