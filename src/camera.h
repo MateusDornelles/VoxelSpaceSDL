@@ -54,11 +54,16 @@ static inline void Camera_Rotate(Camera *cam, float spd) {
 }
 
 static inline void Camera_MoveForward(Camera *cam, float spd, int modHeight) {
+	if(modHeight) {
+		cam->position.x += spd * CAMERA_MOVE_STEP * SDL_sinf(cam->angle);
+		cam->position.y += spd * CAMERA_MOVE_STEP * SDL_cosf(cam->angle);
+		return;
+	}
+
     float low = cam->horizon / cam->maxhorizon * 2 - 1;
     float low_module = SDL_sqrtf(1 + low*low);
     cam->position.x += spd * CAMERA_MOVE_STEP * SDL_sinf(cam->angle) / low_module;
     cam->position.y += spd * CAMERA_MOVE_STEP * SDL_cosf(cam->angle) / low_module;
-    if(!modHeight)
-        cam->height -= spd * CAMERA_MOVE_STEP * low / low_module;
+	cam->height -= spd * CAMERA_MOVE_STEP * low / low_module;
 }
 #endif

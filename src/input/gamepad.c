@@ -6,7 +6,7 @@
 #include "../engine.h"
 #include "../camera.h"
 
-extern int isGravitationEnabled, isOnTheGround;
+extern int isOnTheGround;
 extern float velocity;
 
 static SDL_GameController *pads[INPUT_MAX_PADS] = {0};
@@ -45,9 +45,6 @@ static int ProcessControllerButtonDown(Camera *cam, SDL_GameControllerButton btn
 		case SDL_CONTROLLER_BUTTON_RIGHTSTICK:
 			Camera_ResetPitch(cam);
 			return 1;
-		case SDL_CONTROLLER_BUTTON_BACK:
-			isGravitationEnabled = !isGravitationEnabled;
-			return 1;
 		default: break;
 	}
 
@@ -58,16 +55,18 @@ static int ProcessControllerButtonHold(Camera *cam, SDL_GameControllerButton btn
 	switch (btn) {
 		case SDL_CONTROLLER_BUTTON_DPAD_UP:
 		case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
-			if(!isGravitationEnabled)
-				Camera_StrafeVert(cam, (btn == SDL_CONTROLLER_BUTTON_DPAD_UP ? dm : -dm));
-			return 1;
+			return 0;
 		case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
 		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
-			Camera_StrafeHoriz(cam, (btn == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -dm : dm));
+			Camera_StrafeHoriz(
+				cam,
+				(btn == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -dm : dm) /
+					INPUT_WALK_SPEED_DIVISOR
+			);
 			return 1;
 		case SDL_CONTROLLER_BUTTON_A:
-			if(isGravitationEnabled && isOnTheGround) {
-				velocity += INPUT_JUMP_VELOCITY;
+			if(isOnTheGround) {
+				velocity = INPUT_JUMP_VELOCITY;
 				isOnTheGround = 0;
 			}
 			return 1;
@@ -97,9 +96,8 @@ static int PollController(SDL_GameController *pad, Camera *cam, float dm) {
 	int handled = 0;
 
 	if(SDL_fabsf(leftStick.x) > 0.15f || SDL_fabsf(leftStick.y) > 0.15f) {
-		float speedup = 1.0f + trigger.x;
-		if(isGravitationEnabled) speedup /= 3.0f;
-		Camera_MoveForward(cam, leftStick.y * speedup * dm, isGravitationEnabled);
+		const float speedup = (1.0f + trigger.x) / INPUT_WALK_SPEED_DIVISOR;
+		Camera_MoveForward(cam, leftStick.y * speedup * dm, 1);
 		Camera_StrafeHoriz(cam, leftStick.x * speedup * dm);
 		handled = 1;
 	}

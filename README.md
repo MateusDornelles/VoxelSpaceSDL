@@ -71,6 +71,7 @@ Comanche's Voxel Space rendering algorithm written in C using SDL. You can try i
 * Also you can change default map by passing commandline arguments to VoxelSpace: ``vs.exe -dm "path/to/diffuse.png"  -hm "path/to/height.png"`` or ``vs.exe /diffuse "path/to/image.png" /height "path/to/image.png"``;
 * Benchmark mode is available via ``-benchmark [seconds]`` (alias: ``-bm``; default duration is 10 seconds);
 * Integer window scaling is available via ``-scale 1|2|3`` (alias: ``-is``). For example, the default 640x360 render size opens at 1280x720 with ``-scale 2`` and 1920x1080 with ``-scale 3``;
+* FPS camera controls: mouse to look, WASD to walk, Left Shift to sprint, Space to jump, and Escape to release the mouse;
 * So far there are no VoxelSpace commandline arguments list, see ``src/argparse.c`` for more information.
 
 ## Thanks

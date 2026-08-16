@@ -5,16 +5,16 @@
 #include "../engine.h"
 #include "../camera.h"
 
-extern int isGravitationEnabled, isOnTheGround;
+extern int isOnTheGround;
 extern float velocity;
 
 static SDL_Scancode input[INPUT_MAX_KEYBINDS] = {0};
-static int isMouseGrabbed = 0, persistGrab = 0, isSprintActive = 0;
+static int isMouseGrabbed = 0, isSprintActive = 0;
 
-static inline void ToggleMouseGrab(void) {
-	isMouseGrabbed = !isMouseGrabbed || persistGrab;
-	SDL_SetRelativeMouseMode(isMouseGrabbed);
-	SDL_SetWindowGrab(Engine_GetWindow(), isMouseGrabbed);
+static inline void SetMouseGrab(int enabled) {
+	isMouseGrabbed = enabled;
+	SDL_SetRelativeMouseMode(enabled ? SDL_TRUE : SDL_FALSE);
+	SDL_SetWindowGrab(Engine_GetWindow(), enabled ? SDL_TRUE : SDL_FALSE);
 }
 
 static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
@@ -30,20 +30,18 @@ static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
 		case SDL_SCANCODE_D:
 			input[1] = code;
 			break;
-		case SDL_SCANCODE_E:
-		case SDL_SCANCODE_Q:
-			input[2] = code;
-			break;
 		case SDL_SCANCODE_R:
 		case SDL_SCANCODE_F:
 			input[3] = code;
 			break;
 		case SDL_SCANCODE_SPACE:
 			map->redraw = 1;
-			if(mod & KMOD_CTRL)
+			if(mod & KMOD_CTRL) {
 				Camera_ResetDistance(cam);
-			else
-				Camera_AdjustDistance(cam, (mod & KMOD_SHIFT ? -1.0f : 1.0f) * CAMERA_DISTANCE_STEP);
+			} else if(isOnTheGround) {
+				velocity = INPUT_JUMP_VELOCITY;
+				isOnTheGround = 0;
+			}
 			break;
 		case SDL_SCANCODE_LSHIFT:
 			isSprintActive = 1;
@@ -56,10 +54,6 @@ static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
 		case SDL_SCANCODE_K:
 			Camera_AdjustZStep(cam, code == SDL_SCANCODE_J ? -1.0f : 1.0f);
 			map->redraw = 1;
-			break;
-		case SDL_SCANCODE_G:
-			isGravitationEnabled = !isGravitationEnabled;
-			velocity = 0.0f;
 			break;
 		case SDL_SCANCODE_O:
 			if(mod & KMOD_CTRL) {
@@ -77,10 +71,8 @@ static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
 				Engine_ToggleFullscreen();
 			break;
 		case SDL_SCANCODE_ESCAPE:
-			if(persistGrab) {
-				persistGrab = 0;
-				isMouseGrabbed = 1;
-				ToggleMouseGrab();
+			if(isMouseGrabbed) {
+				SetMouseGrab(0);
 				break;
 			}
 
@@ -100,10 +92,6 @@ static void ProcessKeyUp(SDL_Scancode code) {
 		case SDL_SCANCODE_D:
 			if(input[1] == code) input[1] = 0;
 			break;
-		case SDL_SCANCODE_E:
-		case SDL_SCANCODE_Q:
-			if(input[2] == code) input[2] = 0;
-			break;
 		case SDL_SCANCODE_R:
 		case SDL_SCANCODE_F:
 			if(input[3] == code) input[3] = 0;
@@ -118,27 +106,15 @@ static void ProcessKeyUp(SDL_Scancode code) {
 static int ProcessKeyboard(Camera *cam, float dm) {
 	if(input[3])
 		Camera_Pitch(cam, (input[3] == SDL_SCANCODE_R ? -dm : dm));
-	if(input[2]) {
-		if(isGravitationEnabled) {
-			if(isGravitationEnabled && isOnTheGround) {
-				velocity += INPUT_JUMP_VELOCITY;
-				isOnTheGround = 0;
-			}
-		} else
-			Camera_StrafeVert(cam, (input[2] == SDL_SCANCODE_Q ? -dm : dm));
-	}
-
+	const float speed = (dm / INPUT_WALK_SPEED_DIVISOR) *
+		(isSprintActive ? INPUT_SPRINT_MULTIPLIER : 1.0f);
 	if(input[1]) {
-		float direction = (input[1] == SDL_SCANCODE_A ? -dm : dm);
-		if(isMouseGrabbed)
-			Camera_StrafeHoriz(cam, direction);
-		else
-			Camera_Rotate(cam, direction);
+		const float direction = input[1] == SDL_SCANCODE_A ? -speed : speed;
+		Camera_StrafeHoriz(cam, direction);
 	}
 	if(input[0]) {
-		float speedMod = isGravitationEnabled ? 2.5f : 1.0f;
-		if (isSprintActive) speedMod *= 0.3f;
-		Camera_MoveForward(cam, (input[0] == SDL_SCANCODE_W ? -dm : dm) / speedMod, isGravitationEnabled);
+		const float direction = input[0] == SDL_SCANCODE_W ? -speed : speed;
+		Camera_MoveForward(cam, direction, 1);
 	}
 
 	/*

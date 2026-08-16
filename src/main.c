@@ -49,6 +49,7 @@ int main(int argc, char *argv[]) {
 
 	Engine_AddListener(LISTEN_ENGINE_UPDATE, Input_Update);
 	Engine_AddListener(LISTEN_SDL_EVENT, Input_Event);
+	Engine_AddListener(LISTEN_ENGINE_START, Input_Start);
 #ifndef EMSCRIPTEN
 	Engine_AddListener(LISTEN_SDL_WINDOW, DND_Window);
 	Engine_AddListener(LISTEN_SDL_EVENT, DND_Event);

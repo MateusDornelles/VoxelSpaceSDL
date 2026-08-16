@@ -6,11 +6,24 @@
 #include "map.h"
 #include "input.h"
 
-static int isGravitationEnabled = 0, isOnTheGround = 0;
+static int isOnTheGround = 0;
 static float velocity = 0.0f;
 
 #include "input/kbmouse.c"
 #include "input/gamepad.c"
+
+void Input_Start(void *ptr) {
+	(void)ptr;
+	Map *map = NULL;
+	Camera *cam = NULL;
+	Engine_GetObjects(&cam, &map);
+	cam->height = (float)Map_GetHeight(map, &cam->position) + CAMERA_EYE_HEIGHT;
+	Camera_ResetPitch(cam);
+	isOnTheGround = 1;
+	velocity = 0.0f;
+	SetMouseGrab(1);
+	map->redraw = 1;
+}
 
 void Input_Update(void *ptr) {
 	float delta = *(float *)ptr;
@@ -22,27 +35,26 @@ void Input_Update(void *ptr) {
 	if(PollControllers(cam, delta * 0.03f) || ProcessKeyboard(cam, delta * 0.03f))
 		map->redraw = 1;
 
-	float minHeight = (float)Map_GetHeight(map, &cam->position);
-	if(isGravitationEnabled) {
-		minHeight += 9.0f;
-		if(!isOnTheGround) {
-			velocity -= delta * INPUT_GRAVITATION_MULT * 0.001f;
-			cam->height += velocity;
-		}
+	const float groundHeight =
+		(float)Map_GetHeight(map, &cam->position) + CAMERA_EYE_HEIGHT;
+	if(!isOnTheGround) {
+		const float frameSeconds = delta * 0.001f;
+		velocity -= INPUT_GRAVITY_ACCELERATION * frameSeconds;
+		cam->height += velocity * frameSeconds;
+		map->redraw = 1;
+	}
 
-		if(cam->height > minHeight) {
-			isOnTheGround = 0;
-			map->redraw = 1;
-		} else if(!isOnTheGround) {
-			cam->height = minHeight;
-			isOnTheGround = 1;
-			velocity = 0.0f;
-			map->redraw = 1;
-		}
-	} else minHeight += 2.0f;
+	if(cam->height <= groundHeight) {
+		cam->height = groundHeight;
+		isOnTheGround = 1;
+		velocity = 0.0f;
+	} else if(isOnTheGround) {
+		// Walking over a descending slope starts a short fall.
+		isOnTheGround = 0;
+	}
 
 	// Pull the camera above terrain if it went below ground
-	cam->height = max(minHeight, min(cam->height, CAMERA_HEIGHT_MAX));
+	cam->height = max(groundHeight, min(cam->height, CAMERA_HEIGHT_MAX));
 	// Reset camera angle after a full turn
 	if(SDL_fabsf(cam->angle) > M_PI * 2) cam->angle = 0;
 }
@@ -62,12 +74,9 @@ void Input_Event(void *ptr) {
 		case SDL_KEYUP:
 			ProcessKeyUp(ev->key.keysym.scancode);
 			break;
-		case SDL_MOUSEBUTTONUP:
-			persistGrab = ev->button.clicks > 1;
-			if(persistGrab) isMouseGrabbed = 0;
 		case SDL_MOUSEBUTTONDOWN:
-			if(ev->button.button == SDL_BUTTON_LEFT)
-				ToggleMouseGrab();
+			if(ev->button.button == SDL_BUTTON_LEFT && !isMouseGrabbed)
+				SetMouseGrab(1);
 			break;
 		case SDL_MOUSEMOTION:
 			if(isMouseGrabbed)
