@@ -1,5 +1,8 @@
 #include <SDL_render.h>
 #include <SDL_log.h>
+#ifdef USE_THREADED_RENDER
+#include <SDL_timer.h>
+#endif
 #include <stdlib.h>
 #ifdef USE_AVX2
 #include <immintrin.h>
@@ -531,29 +534,64 @@ static void RenderChunks(struct SMapRenderGlobCtx *gctx) {
 	}
 }
 
+static int SpinForRenderWork(struct SMapRenderGlobCtx *gctx, int generation) {
+	const Uint64 deadline = SDL_GetPerformanceCounter() + gctx->workerSpinTicks;
+	do {
+		for(int i = 0; i < RENDER_SPIN_CHECK_INTERVAL; i++)
+			SDL_CPUPauseInstruction();
+		if(SDL_AtomicGet(&gctx->endwork) ||
+			SDL_AtomicGet(&gctx->generation) != generation)
+			return 1;
+	} while(SDL_GetPerformanceCounter() < deadline);
+	return 0;
+}
+
+static void WaitForRenderWork(struct SMapRenderGlobCtx *gctx, int generation, int workerIndex) {
+	if(workerIndex < RENDER_HOT_WORKERS && SpinForRenderWork(gctx, generation))
+		return;
+
+	SDL_LockMutex(gctx->mutex);
+	if(!SDL_AtomicGet(&gctx->endwork) &&
+		SDL_AtomicGet(&gctx->generation) == generation) {
+		SDL_AtomicAdd(&gctx->sleepingWorkers, 1);
+		while(!SDL_AtomicGet(&gctx->endwork) &&
+			SDL_AtomicGet(&gctx->generation) == generation)
+			SDL_CondWait(gctx->workcond, gctx->mutex);
+		SDL_AtomicAdd(&gctx->sleepingWorkers, -1);
+	}
+	SDL_UnlockMutex(gctx->mutex);
+}
+
+static void SpinForWorkerCompletion(struct SMapRenderGlobCtx *gctx) {
+	const Uint64 deadline = SDL_GetPerformanceCounter() + gctx->completionSpinTicks;
+	do {
+		if(SDL_AtomicGet(&gctx->workersPending) == 0)
+			return;
+		for(int i = 0; i < RENDER_SPIN_CHECK_INTERVAL; i++)
+			SDL_CPUPauseInstruction();
+	} while(SDL_GetPerformanceCounter() < deadline);
+}
+
 static int RenderThread(void *ptr) {
 	struct sMapRenderCtx *ctx = (struct sMapRenderCtx *)ptr;
 	struct SMapRenderGlobCtx *gctx = ctx->global;
-	Uint64 generation = 0;
+	int generation = SDL_AtomicGet(&gctx->generation);
 
 	while(1) {
-		SDL_LockMutex(gctx->mutex);
-		while(!gctx->endwork && generation == gctx->generation)
-			SDL_CondWait(gctx->workcond, gctx->mutex);
-		if(gctx->endwork) {
-			SDL_UnlockMutex(gctx->mutex);
+		WaitForRenderWork(gctx, generation, ctx->index);
+		if(SDL_AtomicGet(&gctx->endwork))
 			break;
-		}
-		generation = gctx->generation;
-		SDL_UnlockMutex(gctx->mutex);
+		generation = SDL_AtomicGet(&gctx->generation);
+		SDL_MemoryBarrierAcquire();
 
 		RenderChunks(gctx);
 
-		SDL_LockMutex(gctx->mutex);
-		gctx->workersPending--;
-		if(gctx->workersPending == 0)
+		const int remaining = SDL_AtomicAdd(&gctx->workersPending, -1) - 1;
+		if(remaining == 0) {
+			SDL_LockMutex(gctx->mutex);
 			SDL_CondSignal(gctx->donecond);
-		SDL_UnlockMutex(gctx->mutex);
+			SDL_UnlockMutex(gctx->mutex);
+		}
 	}
 
 	return 0;
@@ -570,17 +608,20 @@ void Map_Draw(Map *map, Camera *cam) {
 			map->rgctx.cam = cam;
 			map->rgctx.pixels = pixels;
 			map->rgctx.pitch = pitch;
-			map->rgctx.workersPending = map->rctxcnt;
+			SDL_AtomicSet(&map->rgctx.workersPending, map->rctxcnt);
 			SDL_AtomicSet(&map->rgctx.nextColumn, 0);
-			map->rgctx.generation++;
-			SDL_CondBroadcast(map->rgctx.workcond);
+			SDL_MemoryBarrierRelease();
+			SDL_AtomicAdd(&map->rgctx.generation, 1);
+			if(SDL_AtomicGet(&map->rgctx.sleepingWorkers) > 0)
+				SDL_CondBroadcast(map->rgctx.workcond);
 			SDL_UnlockMutex(map->rgctx.mutex);
 
 			// The main thread also consumes chunks instead of waiting idle.
 			RenderChunks(&map->rgctx);
+			SpinForWorkerCompletion(&map->rgctx);
 
 			SDL_LockMutex(map->rgctx.mutex);
-			while(map->rgctx.workersPending > 0)
+			while(SDL_AtomicGet(&map->rgctx.workersPending) > 0)
 				SDL_CondWait(map->rgctx.donecond, map->rgctx.mutex);
 			SDL_UnlockMutex(map->rgctx.mutex);
 		} else {
@@ -595,8 +636,8 @@ void Map_Draw(Map *map, Camera *cam) {
 static void DestroyThreads(Map *map) {
 	if(map->rctxs) {
 		SDL_LockMutex(map->rgctx.mutex);
-		map->rgctx.endwork = 1;
-		map->rgctx.generation++;
+		SDL_AtomicSet(&map->rgctx.endwork, 1);
+		SDL_AtomicAdd(&map->rgctx.generation, 1);
 		SDL_CondBroadcast(map->rgctx.workcond);
 		SDL_UnlockMutex(map->rgctx.mutex);
 
@@ -660,9 +701,15 @@ void Map_SetScreen(Map *map, void *screen) {
 		}
 #ifdef USE_THREADED_RENDER
 		map->rgctx.self = map;
-		map->rgctx.endwork = 0;
-		map->rgctx.generation = 0;
-		map->rgctx.workersPending = 0;
+		SDL_AtomicSet(&map->rgctx.endwork, 0);
+		SDL_AtomicSet(&map->rgctx.generation, 0);
+		SDL_AtomicSet(&map->rgctx.workersPending, 0);
+		SDL_AtomicSet(&map->rgctx.sleepingWorkers, 0);
+		const Uint64 performanceFrequency = SDL_GetPerformanceFrequency();
+		map->rgctx.workerSpinTicks =
+			(performanceFrequency * RENDER_WORKER_SPIN_US) / 1000000u;
+		map->rgctx.completionSpinTicks =
+			(performanceFrequency * RENDER_COMPLETION_SPIN_US) / 1000000u;
 		// Keep enough jobs to balance uneven columns without repeating too much setup.
 		map->rgctx.chunkWidth = width <= 1024 ? 24 : 32;
 		map->rgctx.mutex = SDL_CreateMutex();
@@ -683,6 +730,7 @@ void Map_SetScreen(Map *map, void *screen) {
 			for(int i = 0; i < requestedThreads; i++) {
 				struct sMapRenderCtx *ctx = &map->rctxs[i];
 				ctx->global = &map->rgctx;
+				ctx->index = i;
 				ctx->self = SDL_CreateThread(RenderThread, "voxel-render", ctx);
 				if(!ctx->self) {
 					SDL_LogWarn(0, "Failed to create render thread: %s", SDL_GetError());

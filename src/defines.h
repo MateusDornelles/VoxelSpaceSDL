@@ -21,6 +21,11 @@
 #define GRAPHICS_HEIGHT 360 // SDL window height
 #define GRAPHICS_SKY_COLOR 0x9090E0FF // Background and distance fog color
 
+#define RENDER_HOT_WORKERS 1 // Workers allowed to spin between continuous frames
+#define RENDER_WORKER_SPIN_US 1000 // Hot-wait budget before workers sleep
+#define RENDER_COMPLETION_SPIN_US 25 // Avoid sleeping near the end of a frame
+#define RENDER_SPIN_CHECK_INTERVAL 64 // Pause instructions between clock checks
+
 #define INPUT_MOUSE_SENS 0.0022f // Mouse sensitivity for camera control
 #define INPUT_TOUCH_SENS 80.0f // Gamepad touchpad sensitivity
 #define INPUT_MAX_PADS 8 // Maximum number of supported gamepads

@@ -36,10 +36,13 @@ typedef struct sMap {
 		SDL_cond *donecond; // Condition used to report frame completion
 		struct sMap *self; // Pointer to map data
 		Camera *cam; // Pointer to camera data
-		int endwork; // If 1, all render threads exit
-		Uint64 generation; // Monotonically increasing frame identifier
-		int workersPending; // Workers that have not finished this frame
+		SDL_atomic_t endwork; // If 1, all render threads exit
+		SDL_atomic_t generation; // Monotonically increasing frame identifier
+		SDL_atomic_t workersPending; // Workers that have not finished this frame
+		SDL_atomic_t sleepingWorkers; // Workers blocked on workcond
 		SDL_atomic_t nextColumn; // Start of the next render chunk
+		Uint64 workerSpinTicks; // Hot-wait budget between frames
+		Uint64 completionSpinTicks; // Main-thread completion wait budget
 		int chunkWidth; // Number of columns claimed by each render job
 		int *pixels; // Pointer to screen pixel buffer
 		int pitch; // Pixel buffer row length
@@ -48,6 +51,7 @@ typedef struct sMap {
 	struct sMapRenderCtx {
 		struct SMapRenderGlobCtx *global; // Shared context used by all threads
 		SDL_Thread *self; // Thread object pointer
+		int index; // Stable worker index used by the hybrid wait policy
 	} *rctxs;
 #endif
 } Map;
