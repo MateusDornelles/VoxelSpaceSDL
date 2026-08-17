@@ -39,8 +39,9 @@ if(EMSCRIPTEN)
 		"SHELL:-s USE_SDL=2"
 		"SHELL:-s SINGLE_FILE=1"
 		"SHELL:-s ALLOW_MEMORY_GROWTH=1"
-		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/maps/h1w.bmp@maps/h1w.bmp"
-		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/maps/h1.bmp@maps/h1.bmp"
+		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/maps/ch2w.png@maps/ch2w.png"
+		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/maps/ch2.png@maps/ch2.png"
+		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/maps/supe.apng@maps/supe.apng"
 	)
 	set_target_properties(vs PROPERTIES SUFFIX ".html")
 else()
@@ -64,6 +65,9 @@ endif()
 if(VOXEL_USE_SDL_IMAGE)
 	target_compile_definitions(vs PRIVATE USE_SDL_IMAGE)
 	if(EMSCRIPTEN)
+		target_compile_options(vs PRIVATE
+			"SHELL:-s USE_SDL_IMAGE=2"
+		)
 		target_link_options(vs PRIVATE
 			"SHELL:-s USE_SDL_IMAGE=2"
 			"SHELL:-s SDL2_IMAGE_FORMATS=['png','bmp']"
@@ -77,6 +81,9 @@ endif()
 if(VOXEL_USE_OVERLAY)
 	target_compile_definitions(vs PRIVATE USE_SDL_TTF)
 	if(EMSCRIPTEN)
+		target_compile_options(vs PRIVATE
+			"SHELL:-s USE_SDL_TTF=2"
+		)
 		target_link_options(vs PRIVATE
 			"SHELL:-s USE_SDL_TTF=2"
 			"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/out/Roboto-Regular.ttf@Roboto-Regular.ttf"

@@ -1,6 +1,9 @@
 #include "sprite_renderer.h"
 #include "defines.h"
 #include <SDL.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #ifdef USE_APNG
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -21,6 +24,23 @@ GLuint program,vao,vbo,texture;const Uint32*uploadedPixels;int uploadedWidth,upl
 } sprites;
 
 static void FreeSprite(WorldSprite*s){if(s->ownsFrames){for(int i=0;i<s->frameCount;i++)SDL_free(s->frames[i].pixels);SDL_free(s->frames);}SDL_free(s->path);SDL_memset(s,0,sizeof(*s));}
+#ifdef __EMSCRIPTEN__
+EM_JS(void,BrowserAPNG_Start,(const char *path),{
+	if(Module.vsAPNG)return;
+	const name=UTF8ToString(path),bytes=FS.readFile(name);
+	const image=new Image(),url=URL.createObjectURL(new Blob([bytes],{type:'image/png'}));
+	Module.vsAPNG={image:image,canvas:null,context:null,ready:false,url:url};
+	image.onload=()=>{const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;Module.vsAPNG.canvas=canvas;Module.vsAPNG.context=canvas.getContext('2d',{willReadFrequently:true});Module.vsAPNG.ready=true;};
+	image.onerror=()=>console.error('Failed to decode APNG object: '+name);
+	image.src=url;
+});
+EM_JS(int,BrowserAPNG_Width,(void),{return Module.vsAPNG&&Module.vsAPNG.ready?Module.vsAPNG.canvas.width:0;});
+EM_JS(int,BrowserAPNG_Height,(void),{return Module.vsAPNG&&Module.vsAPNG.ready?Module.vsAPNG.canvas.height:0;});
+EM_JS(void,BrowserAPNG_CopyBGRA,(Uint32 *pixels),{
+	const a=Module.vsAPNG;if(!a||!a.ready)return;const c=a.canvas,x=a.context;x.clearRect(0,0,c.width,c.height);x.drawImage(a.image,0,0);const source=x.getImageData(0,0,c.width,c.height).data,destination=HEAPU8,o=pixels;
+	for(let i=0;i<source.length;i+=4){destination[o+i]=source[i+2];destination[o+i+1]=source[i+1];destination[o+i+2]=source[i];destination[o+i+3]=source[i+3];}
+});
+#endif
 #ifdef USE_APNG
 static int AppendFrame(WorldSprite*s,AVFrame*src,struct SwsContext**converter,AVRational timeBase){
 	SpriteFrame*g=SDL_realloc(s->frames,(size_t)(s->frameCount+1)*sizeof(*g));if(!g)return 0;s->frames=g;SpriteFrame*out=&g[s->frameCount];SDL_memset(out,0,sizeof(*out));
@@ -39,17 +59,29 @@ done: if(p)av_packet_free(&p);if(frame)av_frame_free(&frame);if(converter)sws_fr
 #endif
 
 int SpriteRenderer_AddAPNG(const char*path,float x,float y,float z,float width,float height){
-#ifndef USE_APNG
+#if !defined(USE_APNG) && !defined(__EMSCRIPTEN__)
 	(void)path;(void)x;(void)y;(void)z;(void)width;(void)height;SDL_LogWarn(0,"APNG objects disabled: FFmpeg development libraries were unavailable at build time");return -1;
 #else
 	if(!path||width<=0||height<=0)return -1;WorldSprite s;SDL_memset(&s,0,sizeof(s));s.x=x;s.y=y;s.z=z;s.width=width;s.height=height;s.path=SDL_strdup(path);if(!s.path)return -1;
 	for(int i=0;i<sprites.count;i++)if(SDL_strcmp(sprites.items[i].path,path)==0){s.frames=sprites.items[i].frames;s.frameCount=sprites.items[i].frameCount;s.pixelWidth=sprites.items[i].pixelWidth;s.pixelHeight=sprites.items[i].pixelHeight;break;}
+	#ifdef __EMSCRIPTEN__
+	BrowserAPNG_Start(path);
+	#else
 	if(!s.frames){s.ownsFrames=1;if(!DecodeAPNG(path,&s)){SDL_LogError(0,"Failed to decode APNG object: %s",path);FreeSprite(&s);return -1;}}
+	#endif
 	if(sprites.count==sprites.capacity){int capacity=sprites.capacity?sprites.capacity*2:8;WorldSprite*g=SDL_realloc(sprites.items,(size_t)capacity*sizeof(*g));if(!g){FreeSprite(&s);return -1;}sprites.items=g;sprites.capacity=capacity;}
 	sprites.items[sprites.count]=s;if(s.ownsFrames)SDL_Log("Loaded APNG object: %s (%d frame(s), %dx%d)",path,s.frameCount,s.pixelWidth,s.pixelHeight);return sprites.count++;
 #endif
 }
-void SpriteRenderer_Update(float dt){for(int i=0;i<sprites.count;i++){WorldSprite*s=&sprites.items[i];if(s->frameCount<2)continue;s->elapsedMs+=dt;while(s->elapsedMs>=s->frames[s->currentFrame].durationMs){s->elapsedMs-=s->frames[s->currentFrame].durationMs;s->currentFrame=(s->currentFrame+1)%s->frameCount;}}}
+void SpriteRenderer_Update(float dt){
+#ifdef __EMSCRIPTEN__
+	(void)dt;if(!sprites.count)return;
+	if(!sprites.items[0].frames){int width=BrowserAPNG_Width(),height=BrowserAPNG_Height();if(!width||!height)return;SpriteFrame*frame=SDL_calloc(1,sizeof(*frame));if(!frame)return;frame->pixels=SDL_malloc((size_t)width*height*sizeof(*frame->pixels));if(!frame->pixels){SDL_free(frame);return;}frame->durationMs=100;for(int i=0;i<sprites.count;i++){sprites.items[i].frames=frame;sprites.items[i].frameCount=1;sprites.items[i].pixelWidth=width;sprites.items[i].pixelHeight=height;}sprites.items[0].ownsFrames=1;SDL_Log("Browser decoded APNG object: %s (%dx%d, %d instances)",sprites.items[0].path,width,height,sprites.count);}
+	BrowserAPNG_CopyBGRA(sprites.items[0].frames[0].pixels);
+#else
+	for(int i=0;i<sprites.count;i++){WorldSprite*s=&sprites.items[i];if(s->frameCount<2)continue;s->elapsedMs+=dt;while(s->elapsedMs>=s->frames[s->currentFrame].durationMs){s->elapsedMs-=s->frames[s->currentFrame].durationMs;s->currentFrame=(s->currentFrame+1)%s->frameCount;}}
+#endif
+}
 int SpriteRenderer_HasObjects(void){return sprites.count>0;}
 static Uint32 Blend(Uint32 s,Uint32 d){unsigned a=s>>24;if(a==255)return s;if(!a)return d;unsigned ia=255-a,r=(((s>>16)&255)*a+((d>>16)&255)*ia+127)/255,g=(((s>>8)&255)*a+((d>>8)&255)*ia+127)/255,b=((s&255)*a+(d&255)*ia+127)/255;return 0xff000000u|(r<<16)|(g<<8)|b;}
 void SpriteRenderer_DrawSoftware(Map*m,Camera*c){if(!m->screen||!m->depth||!sprites.count)return;int w=0,h=0,pitchBytes=0;Uint32*pixels=NULL;SDL_QueryTexture((SDL_Texture*)m->screen,NULL,NULL,&w,&h);if(SDL_LockTexture((SDL_Texture*)m->screen,NULL,(void**)&pixels,&pitchBytes)!=0)return;int pitch=pitchBytes/4;float sn=SDL_sinf(c->angle),cs=SDL_cosf(c->angle),scale=(float)h/CAMERA_PROJECTION_SCALE;

@@ -363,7 +363,7 @@ int Engine_Start(EngineSettings *es) {
 	if(es->spritePath)
 		SpriteRenderer_AddAPNG(es->spritePath, es->spriteX, es->spriteY, es->spriteZ,
 			es->spriteWidth, es->spriteHeight);
-	#ifdef USE_APNG
+	#if defined(USE_APNG) || defined(__EMSCRIPTEN__)
 	else if(ctx.map.ready) {
 		Uint32 randomState = 0x51f15e77u;
 		int spriteCount = 0;
