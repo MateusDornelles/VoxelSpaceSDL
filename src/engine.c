@@ -10,6 +10,7 @@
 #include "camera.h"
 #include "map.h"
 #include "polygon_renderer.h"
+#include "sprite_renderer.h"
 #ifdef USE_OPENGL_RENDER
 #include "opengl_renderer.h"
 #endif
@@ -359,6 +360,26 @@ int Engine_Start(EngineSettings *es) {
 			es->ceilingheightmap ? es->ceilingheightmap : es->heightmap
 		);
 	PolygonRenderer_Init(&ctx.map);
+	if(es->spritePath)
+		SpriteRenderer_AddAPNG(es->spritePath, es->spriteX, es->spriteY, es->spriteZ,
+			es->spriteWidth, es->spriteHeight);
+	#ifdef USE_APNG
+	else if(ctx.map.ready) {
+		Uint32 randomState = 0x51f15e77u;
+		int spriteCount = 0;
+		for(int i = 0; i < 200; i++) {
+			randomState = randomState * 1664525u + 1013904223u;
+			const float x = (float)(randomState % (Uint32)ctx.map.width);
+			randomState = randomState * 1664525u + 1013904223u;
+			const float y = (float)(randomState % (Uint32)ctx.map.height);
+			Point position = {x, y};
+			const float z = (float)Map_GetHeight(&ctx.map, &position);
+			if(SpriteRenderer_AddAPNG("maps/supe.apng", x, y, z, 25.0f, 24.0f) >= 0)
+				spriteCount++;
+		}
+		SDL_Log("Demo APNG objects: %d instances", spriteCount);
+	}
+	#endif
 
 	ctx.fps.sampleStart = SDL_GetPerformanceCounter();
 	ctx.fps.sampleFrames = 0;
@@ -417,6 +438,9 @@ int Engine_Update(void) {
 
 	// Run all listeners waiting for UPDATE
 	Engine_CallListeners(LISTEN_ENGINE_UPDATE, &ctx.deltaTime);
+	SpriteRenderer_Update(ctx.deltaTime);
+	if(ctx.backend == RENDERER_SOFTWARE && SpriteRenderer_HasObjects())
+		ctx.map.redraw = 1;
 	UpdateBenchmarkCamera();
 
 	// Redraw the world
@@ -430,6 +454,7 @@ int Engine_Update(void) {
 	{
 	Map_Draw(&ctx.map, &ctx.camera);
 	PolygonRenderer_DrawSoftware(&ctx.map, &ctx.camera);
+	SpriteRenderer_DrawSoftware(&ctx.map, &ctx.camera);
 
 	// Present our texture in the SDL window
 	SDL_RenderClear(ctx.render);
@@ -577,6 +602,7 @@ void Engine_Stop(void) {
 void Engine_End(void) {
 	DestroyPresentationBackend();
 	PolygonRenderer_Destroy();
+	SpriteRenderer_Destroy();
 	Map_Close(&ctx.map);
 
 #ifdef USE_SDL_IMAGE

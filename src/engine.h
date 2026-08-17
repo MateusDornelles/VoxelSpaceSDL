@@ -21,6 +21,8 @@ typedef struct sEngineSettings {
 	RendererBackend renderer;
 	char *diffusemap, *heightmap;
 	char *ceilingdiffusemap, *ceilingheightmap;
+	char *spritePath;
+	float spriteX, spriteY, spriteZ, spriteWidth, spriteHeight;
 #ifdef USE_THREADED_RENDER
 	int numthreads;
 #endif

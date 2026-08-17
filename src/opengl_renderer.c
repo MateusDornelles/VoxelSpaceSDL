@@ -2,6 +2,7 @@
 #include "opengl_renderer.h"
 #include "defines.h"
 #include "polygon_renderer.h"
+#include "sprite_renderer.h"
 #include <SDL_log.h>
 #include <SDL_stdinc.h>
 #include <stddef.h>
@@ -89,7 +90,7 @@ static void U1i(const char*n,int v){glUniform1i(glGetUniformLocation(glr.mapProg
 
 int OpenGLRenderer_Init(SDL_Window*w,int vsync){glr.context=SDL_GL_CreateContext(w);
 	if(!glr.context||SDL_GL_MakeCurrent(w,glr.context)!=0){SDL_LogCritical(0,"OpenGL context failed: %s",SDL_GetError());return 1;}
-	if(!CreatePipelines()||PolygonRenderer_InitOpenGL()!=0)return 1;SDL_GL_SetSwapInterval(vsync?1:0);glDisable(GL_DEPTH_TEST);
+	if(!CreatePipelines()||PolygonRenderer_InitOpenGL()!=0||SpriteRenderer_InitOpenGL()!=0)return 1;SDL_GL_SetSwapInterval(vsync?1:0);glDisable(GL_DEPTH_TEST);
 	SDL_Log("Using OpenGL %s renderer: %s",glGetString(GL_VERSION),glGetString(GL_RENDERER));return 0;}
 void OpenGLRenderer_Resize(int w,int h,int outputWidth,int outputHeight,int integerScale){
 	glr.width=w;glr.height=h;glr.outputWidth=outputWidth;glr.outputHeight=outputHeight;
@@ -122,6 +123,7 @@ void OpenGLRenderer_Draw(Map*m,Camera*c){
 	const char*n[4]={"floorColor","floorHeight","ceilingColor","ceilingHeight"};for(int i=0;i<4;i++){glActiveTexture(GL_TEXTURE0+i);glBindTexture(GL_TEXTURE_2D,glr.tex[i]);U1i(n[i],i);}
 	glBindVertexArray(glr.mapVao);glDrawArrays(GL_TRIANGLES,0,3);glBindVertexArray(0);m->redraw=0;
 	PolygonRenderer_DrawOpenGL(c,glr.width,glr.height);
+	SpriteRenderer_DrawOpenGL(c,glr.width,glr.height);
 	glBindFramebuffer(GL_READ_FRAMEBUFFER,glr.sceneFbo);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,0);
 	glViewport(0,0,glr.outputWidth,glr.outputHeight);glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT);
 	const int scaledWidth=glr.width*glr.integerScale,scaledHeight=glr.height*glr.integerScale;
@@ -140,5 +142,5 @@ static int Width(char c,int s){return c==' '?s*3:s*6;}
 static void Glyph(char c,int x,int y,int s,const unsigned char k[4]){int h=s*4,v=s*5,w=Width(c,s);unsigned char m=Mask(c);if(c=='.'){Rect(x+w-s,y+2*v+2*s,s,s,k);return;}if(m&A)Rect(x+s,y,h,s,k);if(m&B)Rect(x+s+h,y+s,s,v,k);if(m&C)Rect(x+s+h,y+2*s+v,s,v,k);if(m&D)Rect(x+s,y+2*v+2*s,h,s,k);if(m&E)Rect(x,y+2*s+v,s,v,k);if(m&F)Rect(x,y+s,s,v,k);if(m&G)Rect(x+s,y+s+v,h,s,k);}
 void OpenGLRenderer_DrawFPS(float fps){int s=2,g=4,p=6,m=10,w=0;char t[24];SDL_snprintf(t,sizeof(t),"FPS %.0f",fps);for(size_t i=0;t[i];i++)w+=Width(t[i],s)+g;if(w)w-=g;glr.count=0;int l=max(glr.outputWidth-w-p*2-m,m);const unsigned char bg[4]={0,0,0,140},fg[4]={255,255,90,255};Rect(l,m,w+p*2,26+p*2,bg);int x=l+p;for(size_t i=0;t[i];i++){Glyph(t[i],x,m+p,s,fg);x+=Width(t[i],s)+g;}glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glUseProgram(glr.uiProgram);glUniform2f(glr.uiResolution,glr.outputWidth,glr.outputHeight);glBindVertexArray(glr.uiVao);glBindBuffer(GL_ARRAY_BUFFER,glr.uiVbo);glBufferData(GL_ARRAY_BUFFER,glr.count*sizeof(*glr.vertices),glr.vertices,GL_STREAM_DRAW);glDrawArrays(GL_TRIANGLES,0,(GLsizei)glr.count);glBindVertexArray(0);glDisable(GL_BLEND);}
 void OpenGLRenderer_Present(SDL_Window*w){glFinish();SDL_GL_SwapWindow(w);}
-void OpenGLRenderer_Destroy(void){PolygonRenderer_DestroyOpenGL();glDeleteTextures(4,glr.tex);if(glr.sceneColor)glDeleteTextures(1,&glr.sceneColor);if(glr.sceneDepth)glDeleteRenderbuffers(1,&glr.sceneDepth);if(glr.sceneFbo)glDeleteFramebuffers(1,&glr.sceneFbo);if(glr.uiVbo)glDeleteBuffers(1,&glr.uiVbo);if(glr.uiVao)glDeleteVertexArrays(1,&glr.uiVao);if(glr.mapVao)glDeleteVertexArrays(1,&glr.mapVao);if(glr.uiProgram)glDeleteProgram(glr.uiProgram);if(glr.mapProgram)glDeleteProgram(glr.mapProgram);SDL_free(glr.vertices);if(glr.context)SDL_GL_DeleteContext(glr.context);SDL_memset(&glr,0,sizeof(glr));}
+void OpenGLRenderer_Destroy(void){SpriteRenderer_DestroyOpenGL();PolygonRenderer_DestroyOpenGL();glDeleteTextures(4,glr.tex);if(glr.sceneColor)glDeleteTextures(1,&glr.sceneColor);if(glr.sceneDepth)glDeleteRenderbuffers(1,&glr.sceneDepth);if(glr.sceneFbo)glDeleteFramebuffers(1,&glr.sceneFbo);if(glr.uiVbo)glDeleteBuffers(1,&glr.uiVbo);if(glr.uiVao)glDeleteVertexArrays(1,&glr.uiVao);if(glr.mapVao)glDeleteVertexArrays(1,&glr.mapVao);if(glr.uiProgram)glDeleteProgram(glr.uiProgram);if(glr.mapProgram)glDeleteProgram(glr.mapProgram);SDL_free(glr.vertices);if(glr.context)SDL_GL_DeleteContext(glr.context);SDL_memset(&glr,0,sizeof(glr));}
 #endif

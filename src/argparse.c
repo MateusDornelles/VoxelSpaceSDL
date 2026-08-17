@@ -76,6 +76,15 @@ int CommandArgs_Parse(int argc, char *argv[], EngineSettings *es) {
 			else if(SDL_strcasecmp(renderer, "opengl") == 0 || SDL_strcasecmp(renderer, "gl") == 0)
 				es->renderer = RENDERER_OPENGL;
 			else return ShowHelp();
+		} else if(TestArg(argstr, "sprite", "sp")) {
+			if(cursor + 5 >= argc) return ShowHelp();
+			es->spritePath = argv[cursor++];
+			es->spriteX = SDL_atof(argv[cursor++]);
+			es->spriteY = SDL_atof(argv[cursor++]);
+			es->spriteZ = SDL_atof(argv[cursor++]);
+			es->spriteWidth = SDL_atof(argv[cursor++]);
+			es->spriteHeight = SDL_atof(argv[cursor++]);
+			if(es->spriteWidth <= 0.0f || es->spriteHeight <= 0.0f) return ShowHelp();
 #ifdef USE_THREADED_RENDER
 		} else if(TestArg(argstr, "numthreads", "nt")) {
 			es->numthreads = SDL_atoi(argv[cursor++]);

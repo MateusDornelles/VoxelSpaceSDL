@@ -79,6 +79,16 @@ so buildings, bridges and other meshes can pass behind hills correctly. The
 current demo scene places one flat and one textured box in front of the initial
 camera. See `docs/polygon-renderer.md` for the coordinate and material format.
 
+### Animated objects (APNG)
+
+Desktop builds can decode APNG files through FFmpeg and render them as animated,
+camera-facing objects in both backends. They are independent world objects, not
+polygon textures, and share the terrain/polygon depth buffer. Add one from the
+command line with `-sprite file.apng x y z width height`; `z` is the base of the
+object and all dimensions use map/world units. See `docs/apng-objects.md` for
+the runtime API. CMake disables this optional feature with `-DVOXEL_USE_APNG=OFF`
+or automatically when the FFmpeg development libraries are unavailable.
+
 ### Arguments supported by build scripts
 
 * ``dbg`` - Build with debug symbols;
