@@ -121,9 +121,9 @@ void PolygonRenderer_Init(Map *map) {
 #endif
 	for(int y = 0; y < 8; y++) for(int x = 0; x < 8; x++)
 		polygons.checker[y * 8 + x] = ((x ^ y) & 1) ? 0xffd8b060u : 0xff704020u;
-	polygons.flatMaterial = (PolygonMaterial){POLYGON_MATERIAL_FLAT, 0xff4080d0u, NULL, 0, 0};
+	polygons.flatMaterial = (PolygonMaterial){POLYGON_MATERIAL_FLAT, 0xff4080d0u, NULL, 0, 0, 0};
 	polygons.texturedMaterial = (PolygonMaterial){POLYGON_MATERIAL_TEXTURED, 0xffffffffu,
-		polygons.checker, 8, 8};
+		polygons.checker, 8, 8, 0};
 	for(int index = 0; index < 10; index++) {
 		const int column = index % 2;
 		const int row = index / 2;
@@ -188,6 +188,17 @@ static float Edge(float ax, float ay, float bx, float by, float px, float py) {
 	return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
 }
 
+static int TriangleFacesCamera(const PolygonTriangle *triangle, const Camera *camera) {
+	if(triangle->material->doubleSided) return 1;
+	const PolygonVertex *a=&triangle->vertex[0],*b=&triangle->vertex[1],*c=&triangle->vertex[2];
+	const float abx=b->x-a->x,aby=b->y-a->y,abz=b->z-a->z;
+	const float acx=c->x-a->x,acy=c->y-a->y,acz=c->z-a->z;
+	const float nx=aby*acz-abz*acy,ny=abz*acx-abx*acz,nz=abx*acy-aby*acx;
+	const float viewX=camera->position.x-a->x,viewY=camera->position.y-a->y;
+	const float viewZ=camera->height-a->z;
+	return nx*viewX+ny*viewY+nz*viewZ>0.0f;
+}
+
 static Uint32 SampleMaterial(const PolygonMaterial *material, float u, float v) {
 	if(material->type == POLYGON_MATERIAL_FLAT || !material->texture)
 		return material->color;
@@ -209,6 +220,7 @@ static int PrepareProjectedTriangles(Camera *camera, int width, int height) {
 	polygons.projectedCount = 0;
 	for(int index = 0; index < polygons.triangleCount; index++) {
 		const PolygonTriangle *source = &polygons.triangles[index];
+		if(!TriangleFacesCamera(source,camera)) continue;
 		ProjectedTriangle *triangle = &polygons.projected[polygons.projectedCount];
 		if(!ProjectVertex(&source->vertex[0], camera, width, height, &triangle->vertex[0]) ||
 		   !ProjectVertex(&source->vertex[1], camera, width, height, &triangle->vertex[1]) ||
@@ -454,7 +466,7 @@ void PolygonRenderer_DrawOpenGL(Camera *camera, int width, int height) {
 	glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,polygons.texture);glUniform1i(glGetUniformLocation(polygons.program,"polygonTexture"),0);
 	glBindVertexArray(polygons.vao);glBindBuffer(GL_ARRAY_BUFFER,polygons.vbo);
 	for(int i=0;i<polygons.triangleCount;i++) {
-		const PolygonTriangle *t=&polygons.triangles[i];GLPolygonVertex vertices[3];
+		const PolygonTriangle *t=&polygons.triangles[i];if(!TriangleFacesCamera(t,camera))continue;GLPolygonVertex vertices[3];
 		if(t->material->type==POLYGON_MATERIAL_TEXTURED&&
 			(t->material->texture!=polygons.uploadedTexture||t->material->textureWidth!=polygons.uploadedTextureWidth||t->material->textureHeight!=polygons.uploadedTextureHeight)){
 			glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,t->material->textureWidth,t->material->textureHeight,0,GL_BGRA,GL_UNSIGNED_BYTE,t->material->texture);

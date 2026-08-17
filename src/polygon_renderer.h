@@ -18,6 +18,7 @@ typedef struct sPolygonMaterial {
 	Uint32 color;
 	const Uint32 *texture;
 	int textureWidth, textureHeight;
+	int doubleSided;
 } PolygonMaterial;
 
 typedef struct sPolygonTriangle {

@@ -8,6 +8,9 @@ Call `PolygonRenderer_AddTriangle` with a `PolygonTriangle`. Materials may use
 `POLYGON_MATERIAL_FLAT` with a packed ARGB color, or
 `POLYGON_MATERIAL_TEXTURED` with an ARGB pixel buffer. Texture storage belongs
 to the caller and must remain valid while the triangle is in the scene.
+Faces use counter-clockwise winding when viewed from outside. Back-facing
+triangles are rejected before projection in both backends. Set a material's
+`doubleSided` field to a nonzero value when both sides must remain visible.
 
 `PolygonRenderer_Clear` removes all submitted geometry. After changing the
 software scene, set `map->redraw` so the terrain texture and its depth buffer
