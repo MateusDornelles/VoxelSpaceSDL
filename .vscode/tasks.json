@@ -9,7 +9,7 @@
 				"-S", ".",
 				"-B", "build",
 				"-DCMAKE_BUILD_TYPE=Release",
-				"-DVOXEL_USE_THREADED_RENDER=ON",
+				"-DVOXEL_USE_THREADED_RENDER=OFF",
 				"-DVOXEL_USE_AVX2=ON",
 				"-DVOXEL_USE_SDL_IMAGE=ON",
 				"-DVOXEL_USE_OVERLAY=OFF"
@@ -60,6 +60,88 @@
 			"dependsOn": [
 				"Build VoxelSpace",
 				"Run VoxelSpace"
+			],
+			"problemMatcher": []
+		},
+		{
+			"type": "shell",
+			"label": "Configure VoxelSpace (Profile)",
+			"command": "cmake",
+			"args": [
+				"-S", ".",
+				"-B", "build",
+				"-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+				"-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g -fno-omit-frame-pointer",
+				"-DVOXEL_USE_THREADED_RENDER=OFF",
+				"-DVOXEL_USE_AVX2=ON",
+				"-DVOXEL_USE_SDL_IMAGE=ON",
+				"-DVOXEL_USE_OVERLAY=OFF"
+			],
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "Build VoxelSpace (Profile)",
+			"command": "cmake",
+			"args": ["--build", "build", "--config", "RelWithDebInfo", "-j"],
+			"dependsOn": "Configure VoxelSpace (Profile)",
+			"presentation": {
+				"echo": false,
+				"reveal": "silent",
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": true
+			},
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": "build"
+		},
+		{
+			"type": "shell",
+			"label": "Profile VoxelSpace (Callgrind)",
+			"linux": {
+				"command": "mkdir -p build/profile && valgrind --tool=callgrind --cache-sim=yes --branch-sim=yes --dump-instr=yes --collect-jumps=yes --callgrind-out-file=build/profile/callgrind.out.%p ./build/bin/vs -benchmark 30"
+			},
+			"problemMatcher": [],
+			"dependsOn": "Build VoxelSpace (Profile)",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"panel": "dedicated",
+				"showReuseMessage": false,
+				"clear": true
+			}
+		},
+		{
+			"type": "shell",
+			"label": "Open Callgrind in KCachegrind",
+			"linux": {
+				"command": "OUT=$(ls -t build/profile/callgrind.out.* 2>/dev/null | head -1); if [ -z \"$OUT\" ]; then echo 'No callgrind.out found in build/profile. Run \"Profile VoxelSpace (Callgrind)\" first.'; exit 1; fi; echo \"Opening $OUT\"; kcachegrind \"$OUT\""
+			},
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"panel": "shared",
+				"showReuseMessage": false
+			}
+		},
+		{
+			"label": "Profile and Open in KCachegrind",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Profile VoxelSpace (Callgrind)",
+				"Open Callgrind in KCachegrind"
 			],
 			"problemMatcher": []
 		},

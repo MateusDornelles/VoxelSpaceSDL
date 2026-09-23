@@ -36,7 +36,7 @@ int main(int argc, char *argv[]) {
 		.vsync = 0,
 		.width = GRAPHICS_WIDTH,
 		.height = GRAPHICS_HEIGHT,
-		.integerScale = 1,
+		.integerScale = 3,
 		.benchmarkSeconds = 0,
 		.renderer = RENDERER_SOFTWARE,
 		.diffusemap = "maps/ch2w.png",

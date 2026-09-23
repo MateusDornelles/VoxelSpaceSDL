@@ -12,7 +12,7 @@ endif()
 
 option(VOXEL_USE_SDL_IMAGE "Build with BMP and PNG image support through SDL2_image" ON)
 option(VOXEL_USE_OVERLAY "Build with overlay module (SDL2_ttf)" ON)
-option(VOXEL_USE_THREADED_RENDER "Build with threaded renderer" ON)
+option(VOXEL_USE_THREADED_RENDER "Build with threaded renderer" OFF)
 option(VOXEL_USE_AVX2 "Build with AVX2 optimizations" ON)
 option(VOXEL_WARNINGS_EXTRA "Enable extra compiler warnings" OFF)
 option(VOXEL_USE_APNG "Enable animated PNG billboard objects through FFmpeg" ON)
