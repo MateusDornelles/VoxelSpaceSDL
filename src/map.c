@@ -102,7 +102,8 @@ static int LoadLayer(const char *diffuse, const char *height, struct sMapLayerDa
 	out->shift = (int)(SDL_log10(sHeight->w) / SDL_log10(2));
 	const size_t pixelCount = (size_t)sHeight->w * (size_t)sHeight->h;
 	out->color = SDL_calloc(pixelCount, sizeof(*out->color));
-	out->altitude = SDL_calloc(pixelCount, sizeof(*out->altitude));
+	/* +3 bytes so AVX2 byte-gathers can safely read a 32-bit load at the last index. */
+	out->altitude = SDL_calloc(pixelCount + 3, sizeof(*out->altitude));
 	if(!out->color || !out->altitude) {
 		ret = ERROR_MALLOC_FAIL;
 		goto cleanup;
@@ -231,6 +232,51 @@ static inline float SampleHeightBilinear(
 	const float bottom = h01 + (h11 - h01) * fx;
 	return top + (bottom - top) * fy;
 }
+
+#ifdef USE_AVX2
+static inline __m256 GatherAltitudeU8(const unsigned char *altitude, __m256i offsets) {
+	const __m256i bytes = _mm256_i32gather_epi32(
+		(const int *)(const void *)altitude, offsets, 1);
+	const __m256i masked = _mm256_and_si256(bytes, _mm256_set1_epi32(0xff));
+	return _mm256_cvtepi32_ps(masked);
+}
+
+static inline __m256 SampleHeightBilinearAVX2(
+	const unsigned char *altitude,
+	__m256 x, __m256 y, __m256i maskv, __m256i shiftv
+) {
+	const __m256 zero = _mm256_setzero_ps();
+	const __m256 one = _mm256_set1_ps(1.0f);
+
+	__m256i x0 = _mm256_cvttps_epi32(x);
+	__m256i y0 = _mm256_cvttps_epi32(y);
+	__m256 fx = _mm256_sub_ps(x, _mm256_cvtepi32_ps(x0));
+	__m256 fy = _mm256_sub_ps(y, _mm256_cvtepi32_ps(y0));
+
+	const __m256 fxNeg = _mm256_cmp_ps(fx, zero, _CMP_LT_OQ);
+	const __m256 fyNeg = _mm256_cmp_ps(fy, zero, _CMP_LT_OQ);
+	x0 = _mm256_add_epi32(x0, _mm256_castps_si256(fxNeg));
+	y0 = _mm256_add_epi32(y0, _mm256_castps_si256(fyNeg));
+	fx = _mm256_add_ps(fx, _mm256_and_ps(fxNeg, one));
+	fy = _mm256_add_ps(fy, _mm256_and_ps(fyNeg, one));
+
+	const __m256i x1 = _mm256_add_epi32(x0, _mm256_set1_epi32(1));
+	const __m256i y1 = _mm256_add_epi32(y0, _mm256_set1_epi32(1));
+	const __m256i x0m = _mm256_and_si256(x0, maskv);
+	const __m256i x1m = _mm256_and_si256(x1, maskv);
+	const __m256i y0s = _mm256_sllv_epi32(_mm256_and_si256(y0, maskv), shiftv);
+	const __m256i y1s = _mm256_sllv_epi32(_mm256_and_si256(y1, maskv), shiftv);
+
+	const __m256 h00 = GatherAltitudeU8(altitude, _mm256_add_epi32(y0s, x0m));
+	const __m256 h10 = GatherAltitudeU8(altitude, _mm256_add_epi32(y0s, x1m));
+	const __m256 h01 = GatherAltitudeU8(altitude, _mm256_add_epi32(y1s, x0m));
+	const __m256 h11 = GatherAltitudeU8(altitude, _mm256_add_epi32(y1s, x1m));
+
+	const __m256 top = _mm256_add_ps(h00, _mm256_mul_ps(_mm256_sub_ps(h10, h00), fx));
+	const __m256 bottom = _mm256_add_ps(h01, _mm256_mul_ps(_mm256_sub_ps(h11, h01), fx));
+	return _mm256_add_ps(top, _mm256_mul_ps(_mm256_sub_ps(bottom, top), fy));
+}
+#endif
 
 static inline float NextDepthStep(
 	float current, float z, float distance, float zstep,
@@ -374,19 +420,13 @@ static void DrawFromToFloorOnlyAVX2(Map *map, Camera *cam, int *pixels, int pitc
 			const __m256i iy = _mm256_and_si256(_mm256_cvttps_epi32(lanePy), mapMaskv);
 			const __m256i offsetv = _mm256_add_epi32(_mm256_sllv_epi32(iy, shiftv), ix);
 			const __m256i colorv = _mm256_i32gather_epi32(color, offsetv, sizeof(int));
+			const __m256 altv = SampleHeightBilinearAVX2(
+				altitude, lanePx, lanePy, mapMaskv, shiftv);
 
-			int offsets[8], tops[8], hiddens[8], colors[8];
-			float sampleXs[8], sampleYs[8], alts[8];
-			_mm256_storeu_si256((__m256i *)(void *)offsets, offsetv);
+			int tops[8], hiddens[8], colors[8];
 			_mm256_storeu_si256((__m256i *)(void *)hiddens, hiddenv);
 			_mm256_storeu_si256((__m256i *)(void *)colors, colorv);
-			_mm256_storeu_ps(sampleXs, lanePx);
-			_mm256_storeu_ps(sampleYs, lanePy);
-			for(int lane = 0; lane < 8; lane++)
-				alts[lane] = SampleHeightBilinear(
-					altitude, sampleXs[lane], sampleYs[lane], mapMask, mapShift);
 
-			const __m256 altv = _mm256_loadu_ps(alts);
 			const __m256 floorTopf = _mm256_add_ps(
 				_mm256_mul_ps(_mm256_sub_ps(camHeightv, altv), invzv),
 				camHorizonv
@@ -424,6 +464,179 @@ static void DrawFromToFloorOnlyAVX2(Map *map, Camera *cam, int *pixels, int pitc
 			DrawVerticalLine(
 				map, pixels, pitch, i, floorTop, h,
 				ApplyDistanceFog(color[offset], fogAmount), z
+			);
+			if(floorTop < h)
+				hiddeny[i] = floorTop;
+		}
+
+		if(!hasVisibleColumns)
+			break;
+		deltaz = NextDepthStep(deltaz, z, camDistance, zstep, optimize, optdist);
+	}
+}
+
+static void DrawFromToFloorAndCeilingAVX2(Map *map, Camera *cam, int *pixels, int pitch, int start, int end) {
+	const float scale = cam->maxhorizon / 2.5f;
+	const float sinang = SDL_sinf(cam->angle);
+	const float cosang = SDL_cosf(cam->angle);
+	const float camHeight = cam->height;
+	const float camHorizon = cam->horizon;
+	const float camDistance = cam->distance;
+	const float camPosX = cam->position.x;
+	const float camPosY = cam->position.y;
+	const float zstep = cam->zstep;
+	const float ceilingBase = map->ceilingBase;
+
+	const int floorMask = map->width - 1;
+	const int floorShift = map->shift;
+	const int ceilMask = map->ceilingWidth - 1;
+	const int ceilShift = map->ceilingShift;
+	const int sameLayout = floorMask == ceilMask && floorShift == ceilShift;
+	const int optimize = map->optimize;
+	const float optdist = map->optdist;
+	int *const hiddeny = map->hiddeny;
+	int *const showny = map->showny;
+	const int *const floorColor = map->color;
+	const unsigned char *const floorAltitude = map->altitude;
+	const int *const ceilingColor = map->ceilingColor;
+	const unsigned char *const ceilingAltitude = map->ceilingAltitude;
+
+	const __m256 lanes = _mm256_setr_ps(0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f);
+	const __m256i floorMaskv = _mm256_set1_epi32(floorMask);
+	const __m256i floorShiftv = _mm256_set1_epi32(floorShift);
+	const __m256i ceilMaskv = _mm256_set1_epi32(ceilMask);
+	const __m256i ceilShiftv = _mm256_set1_epi32(ceilShift);
+
+	float deltaz = 1.0f;
+	for(float z = 1.0f; z < camDistance; z += deltaz) {
+		const float invz = scale / z;
+		const int fogAmount = DistanceFogAmount(z, camDistance);
+		const float dx = (2.0f * cosang * z) / (float)pitch;
+		const float dy = (-2.0f * sinang * z) / (float)pitch;
+		float px = ((-cosang - sinang) * z) + camPosX + (dx * (float)start);
+		float py = ((sinang - cosang) * z) + camPosY + (dy * (float)start);
+		int hasVisibleColumns = 0;
+
+		const __m256 dxv = _mm256_set1_ps(dx);
+		const __m256 dyv = _mm256_set1_ps(dy);
+		const __m256 invzv = _mm256_set1_ps(invz);
+		const __m256 camHeightv = _mm256_set1_ps(camHeight);
+		const __m256 camHorizonv = _mm256_set1_ps(camHorizon);
+		const __m256 ceilingBasev = _mm256_set1_ps(ceilingBase);
+
+		int i = start;
+		for(; i + 8 <= end; i += 8) {
+			const __m256i hiddenv = _mm256_loadu_si256((const __m256i *)(const void *)(hiddeny + i));
+			const __m256i shownv = _mm256_loadu_si256((const __m256i *)(const void *)(showny + i));
+			const __m256i visiblev = _mm256_cmpgt_epi32(hiddenv, shownv);
+			const int visibleMask = _mm256_movemask_ps(_mm256_castsi256_ps(visiblev));
+			if(!visibleMask)
+				continue;
+			hasVisibleColumns = 1;
+
+			const __m256 chunkBaseX = _mm256_set1_ps(px + dx * (float)(i - start));
+			const __m256 chunkBaseY = _mm256_set1_ps(py + dy * (float)(i - start));
+			const __m256 lanePx = _mm256_add_ps(chunkBaseX, _mm256_mul_ps(dxv, lanes));
+			const __m256 lanePy = _mm256_add_ps(chunkBaseY, _mm256_mul_ps(dyv, lanes));
+			const __m256i ix = _mm256_cvttps_epi32(lanePx);
+			const __m256i iy = _mm256_cvttps_epi32(lanePy);
+
+			const __m256i cOffsetv = _mm256_add_epi32(
+				_mm256_sllv_epi32(_mm256_and_si256(iy, ceilMaskv), ceilShiftv),
+				_mm256_and_si256(ix, ceilMaskv)
+			);
+			const __m256i fOffsetv = sameLayout ? cOffsetv : _mm256_add_epi32(
+				_mm256_sllv_epi32(_mm256_and_si256(iy, floorMaskv), floorShiftv),
+				_mm256_and_si256(ix, floorMaskv)
+			);
+
+			const __m256i ceilColorv = _mm256_i32gather_epi32(ceilingColor, cOffsetv, sizeof(int));
+			const __m256i floorColorv = _mm256_i32gather_epi32(floorColor, fOffsetv, sizeof(int));
+			const __m256 ceilAltv = SampleHeightBilinearAVX2(
+				ceilingAltitude, lanePx, lanePy, ceilMaskv, ceilShiftv);
+			const __m256 floorAltv = SampleHeightBilinearAVX2(
+				floorAltitude, lanePx, lanePy, floorMaskv, floorShiftv);
+
+			const __m256 cBottomf = _mm256_add_ps(
+				_mm256_mul_ps(
+					_mm256_sub_ps(camHeightv, _mm256_sub_ps(ceilingBasev, ceilAltv)),
+					invzv
+				),
+				camHorizonv
+			);
+			const __m256 floorTopf = _mm256_add_ps(
+				_mm256_mul_ps(_mm256_sub_ps(camHeightv, floorAltv), invzv),
+				camHorizonv
+			);
+
+			int showns[8], hiddens[8], cBottoms[8], floorTops[8], ceilColors[8], floorColors[8];
+			_mm256_storeu_si256((__m256i *)(void *)showns, shownv);
+			_mm256_storeu_si256((__m256i *)(void *)hiddens, hiddenv);
+			_mm256_storeu_si256((__m256i *)(void *)cBottoms, _mm256_cvttps_epi32(cBottomf));
+			_mm256_storeu_si256((__m256i *)(void *)floorTops, _mm256_cvttps_epi32(floorTopf));
+			_mm256_storeu_si256((__m256i *)(void *)ceilColors, ceilColorv);
+			_mm256_storeu_si256((__m256i *)(void *)floorColors, floorColorv);
+
+			for(int lane = 0; lane < 8; lane++) {
+				if((visibleMask & (1 << lane)) == 0)
+					continue;
+				const int col = i + lane;
+				const int h = hiddens[lane];
+				int s = showns[lane];
+				const int cBottom = cBottoms[lane];
+				DrawVerticalLine(
+					map, pixels, pitch, col, s, min(cBottom, h),
+					ApplyDistanceFog(ceilColors[lane], fogAmount), z
+				);
+				if(cBottom > s)
+					s = min(cBottom, h);
+				showny[col] = s;
+				if(s >= h)
+					continue;
+
+				const int floorTop = floorTops[lane];
+				DrawVerticalLine(
+					map, pixels, pitch, col, max(floorTop, s), h,
+					ApplyDistanceFog(floorColors[lane], fogAmount), z
+				);
+				if(floorTop < h)
+					hiddeny[col] = floorTop;
+			}
+		}
+
+		for(; i < end; i++) {
+			const int h = hiddeny[i];
+			int s = showny[i];
+			if(s >= h)
+				continue;
+			hasVisibleColumns = 1;
+
+			const float lanePx = px + dx * (float)(i - start);
+			const float lanePy = py + dy * (float)(i - start);
+			const int sampleX = (int)lanePx;
+			const int sampleY = (int)lanePy;
+			const int cOffset = (((sampleY & ceilMask) << ceilShift) + (sampleX & ceilMask));
+			const float sampledCeilingHeight = SampleHeightBilinear(
+				ceilingAltitude, lanePx, lanePy, ceilMask, ceilShift);
+			const int cBottom = (int)((camHeight - (ceilingBase - sampledCeilingHeight)) * invz + camHorizon);
+			DrawVerticalLine(
+				map, pixels, pitch, i, s, min(cBottom, h),
+				ApplyDistanceFog(ceilingColor[cOffset], fogAmount), z
+			);
+			if(cBottom > s)
+				s = min(cBottom, h);
+			showny[i] = s;
+			if(s >= h)
+				continue;
+
+			const int fOffset = sameLayout ? cOffset :
+				(((sampleY & floorMask) << floorShift) + (sampleX & floorMask));
+			const float sampledFloorHeight = SampleHeightBilinear(
+				floorAltitude, lanePx, lanePy, floorMask, floorShift);
+			const int floorTop = (int)((camHeight - sampledFloorHeight) * invz + camHorizon);
+			DrawVerticalLine(
+				map, pixels, pitch, i, max(floorTop, s), h,
+				ApplyDistanceFog(floorColor[fOffset], fogAmount), z
 			);
 			if(floorTop < h)
 				hiddeny[i] = floorTop;
@@ -516,7 +729,12 @@ static void DrawFromToFloorAndCeiling(Map *map, Camera *cam, int *pixels, int pi
 static inline void DrawFromTo(Map *map, Camera *cam, int *pixels, int pitch, int start, int end) {
 	if(!map->ready) return;
 	if(map->ceilingReady && map->ceilingEnabled) {
-		DrawFromToFloorAndCeiling(map, cam, pixels, pitch, start, end);
+#ifdef USE_AVX2
+		if(map->useAVX2)
+			DrawFromToFloorAndCeilingAVX2(map, cam, pixels, pitch, start, end);
+		else
+#endif
+			DrawFromToFloorAndCeiling(map, cam, pixels, pitch, start, end);
 	} else {
 #ifdef USE_AVX2
 		if(map->useAVX2)
