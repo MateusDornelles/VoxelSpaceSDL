@@ -32,9 +32,16 @@ typedef struct sProjectedTriangle {
 	int minX, maxX, minY, maxY;
 } ProjectedTriangle;
 
+typedef struct sPolygonCollider {
+	float minX, minY, minZ;
+	float maxX, maxY, maxZ;
+} PolygonCollider;
+
 static struct {
 	PolygonTriangle *triangles;
 	int triangleCount, triangleCapacity;
+	PolygonCollider *colliders;
+	int colliderCount, colliderCapacity;
 	ProjectedTriangle *projected;
 	int projectedCount, projectedCapacity;
 	Uint32 checker[64];
@@ -78,6 +85,71 @@ static int ReserveTriangles(int required) {
 	return 1;
 }
 
+static int ReserveColliders(int required) {
+	if(required <= polygons.colliderCapacity) return 1;
+	int capacity = polygons.colliderCapacity ? polygons.colliderCapacity * 2 : 32;
+	while(capacity < required) capacity *= 2;
+	void *memory = SDL_realloc(polygons.colliders, (size_t)capacity * sizeof(*polygons.colliders));
+	if(!memory) return 0;
+	polygons.colliders = memory;
+	polygons.colliderCapacity = capacity;
+	return 1;
+}
+
+int PolygonRenderer_AddColliderBox(float x, float y, float z, float width, float depth, float height) {
+	if(width <= 0.0f || depth <= 0.0f || height <= 0.0f) return 0;
+	if(!ReserveColliders(polygons.colliderCount + 1)) return 0;
+	PolygonCollider *collider = &polygons.colliders[polygons.colliderCount++];
+	collider->minX = x;
+	collider->minY = y;
+	collider->minZ = z;
+	collider->maxX = x + width;
+	collider->maxY = y + depth;
+	collider->maxZ = z + height;
+	return 1;
+}
+
+float PolygonRenderer_GetSupportHeight(float x, float y) {
+	float best = -FLT_MAX;
+	for(int i = 0; i < polygons.colliderCount; i++) {
+		const PolygonCollider *c = &polygons.colliders[i];
+		if(x < c->minX || x > c->maxX || y < c->minY || y > c->maxY)
+			continue;
+		if(c->maxZ > best)
+			best = c->maxZ;
+	}
+	return best;
+}
+
+void PolygonRenderer_ResolvePosition(float *x, float *y, float feetZ, float headZ, float radius) {
+	if(!x || !y || radius <= 0.0f || headZ <= feetZ) return;
+	const float skin = 0.05f;
+	for(int pass = 0; pass < INPUT_COLLISION_ITERATIONS; pass++) {
+		for(int i = 0; i < polygons.colliderCount; i++) {
+			const PolygonCollider *c = &polygons.colliders[i];
+			if(headZ <= c->minZ + skin || feetZ >= c->maxZ - skin)
+				continue;
+
+			const float minX = c->minX - radius;
+			const float maxX = c->maxX + radius;
+			const float minY = c->minY - radius;
+			const float maxY = c->maxY + radius;
+			if(*x <= minX || *x >= maxX || *y <= minY || *y >= maxY)
+				continue;
+
+			const float left = *x - minX;
+			const float right = maxX - *x;
+			const float bottom = *y - minY;
+			const float top = maxY - *y;
+			const float nearest = min(min(left, right), min(bottom, top));
+			if(nearest == left) *x = minX;
+			else if(nearest == right) *x = maxX;
+			else if(nearest == bottom) *y = minY;
+			else *y = maxY;
+		}
+	}
+}
+
 static void AddTriangleVertices(
 	PolygonVertex a, PolygonVertex b, PolygonVertex c, const PolygonMaterial *material
 ) {
@@ -112,6 +184,7 @@ static void AddBox(float x, float y, float z, float width, float depth, float he
 	AddQuad(p100, p110, p111, p101, material);
 	AddQuad(p001, p101, p111, p011, material);
 	AddQuad(p010, p110, p100, p000, material);
+	PolygonRenderer_AddColliderBox(x, y, z, width, depth, height);
 }
 
 void PolygonRenderer_Init(Map *map) {
@@ -145,16 +218,21 @@ void PolygonRenderer_Destroy(void) {
 	DestroyPolygonWorkers();
 #endif
 	SDL_free(polygons.triangles);
+	SDL_free(polygons.colliders);
 	SDL_free(polygons.projected);
 	polygons.triangles = NULL;
+	polygons.colliders = NULL;
 	polygons.projected = NULL;
 	polygons.triangleCount = 0;
 	polygons.triangleCapacity = 0;
+	polygons.colliderCount = 0;
+	polygons.colliderCapacity = 0;
 	polygons.projectedCount = polygons.projectedCapacity = 0;
 }
 
 void PolygonRenderer_Clear(void) {
 	polygons.triangleCount = 0;
+	polygons.colliderCount = 0;
 }
 
 int PolygonRenderer_AddTriangle(const PolygonTriangle *triangle) {
@@ -167,25 +245,98 @@ int PolygonRenderer_AddTriangle(const PolygonTriangle *triangle) {
 	return 1;
 }
 
-static int ProjectVertex(const PolygonVertex *vertex, const Camera *camera,
-	int width, int height, ProjectedVertex *projected) {
+#define POLYGON_NEAR_DEPTH 1.0f
+
+typedef struct sCameraSpaceVertex {
+	float lateral, height, depth, u, v;
+} CameraSpaceVertex;
+
+static CameraSpaceVertex ToCameraSpace(const PolygonVertex *vertex, const Camera *camera) {
 	const float sine = SDL_sinf(camera->angle), cosine = SDL_cosf(camera->angle);
 	const float dx = vertex->x - camera->position.x;
 	const float dy = vertex->y - camera->position.y;
-	const float depth = (-sine * dx) - (cosine * dy);
-	if(depth <= 1.0f || depth >= camera->distance) return 0;
-	const float lateral = (cosine * dx) - (sine * dy);
-	const float scale = (float)height / CAMERA_PROJECTION_SCALE;
-	projected->x = ((lateral / depth) + 1.0f) * (float)width * 0.5f;
-	projected->y = ((camera->height - vertex->z) * scale / depth) + camera->horizon;
-	projected->inverseDepth = 1.0f / depth;
-	projected->uOverDepth = vertex->u / depth;
-	projected->vOverDepth = vertex->v / depth;
-	return 1;
+	return (CameraSpaceVertex){
+		.lateral = (cosine * dx) - (sine * dy),
+		.height = camera->height - vertex->z,
+		.depth = (-sine * dx) - (cosine * dy),
+		.u = vertex->u,
+		.v = vertex->v
+	};
+}
+
+static CameraSpaceVertex LerpCameraSpace(CameraSpaceVertex a, CameraSpaceVertex b, float t) {
+	return (CameraSpaceVertex){
+		.lateral = a.lateral + (b.lateral - a.lateral) * t,
+		.height = a.height + (b.height - a.height) * t,
+		.depth = a.depth + (b.depth - a.depth) * t,
+		.u = a.u + (b.u - a.u) * t,
+		.v = a.v + (b.v - a.v) * t
+	};
+}
+
+/* Clip polygon to depth >= near. Returns 0, 3 or 4 vertices. */
+static int ClipPolygonNear(
+	const CameraSpaceVertex *input, int inputCount,
+	CameraSpaceVertex *output, float nearDepth
+) {
+	CameraSpaceVertex previous = input[inputCount - 1];
+	int previousInside = previous.depth >= nearDepth;
+	int outputCount = 0;
+	for(int i = 0; i < inputCount; i++) {
+		const CameraSpaceVertex current = input[i];
+		const int currentInside = current.depth >= nearDepth;
+		if(currentInside != previousInside) {
+			const float denom = current.depth - previous.depth;
+			const float t = SDL_fabsf(denom) > 1e-8f ?
+				(nearDepth - previous.depth) / denom : 0.0f;
+			output[outputCount++] = LerpCameraSpace(previous, current, t);
+		}
+		if(currentInside)
+			output[outputCount++] = current;
+		previous = current;
+		previousInside = currentInside;
+	}
+	return outputCount;
 }
 
 static float Edge(float ax, float ay, float bx, float by, float px, float py) {
 	return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+}
+
+static void ProjectCameraVertex(
+	const CameraSpaceVertex *vertex, int width, int height, float horizon,
+	ProjectedVertex *projected
+) {
+	const float scale = (float)height / CAMERA_PROJECTION_SCALE;
+	const float depth = vertex->depth;
+	projected->x = ((vertex->lateral / depth) + 1.0f) * (float)width * 0.5f;
+	projected->y = (vertex->height * scale / depth) + horizon;
+	projected->inverseDepth = 1.0f / depth;
+	projected->uOverDepth = vertex->u / depth;
+	projected->vOverDepth = vertex->v / depth;
+}
+
+static int EmitProjectedTriangle(
+	const CameraSpaceVertex *a, const CameraSpaceVertex *b, const CameraSpaceVertex *c,
+	const PolygonMaterial *material, const Camera *camera, int width, int height
+) {
+	if(a->depth >= camera->distance && b->depth >= camera->distance && c->depth >= camera->distance)
+		return 0;
+	ProjectedTriangle *triangle = &polygons.projected[polygons.projectedCount];
+	ProjectCameraVertex(a, width, height, camera->horizon, &triangle->vertex[0]);
+	ProjectCameraVertex(b, width, height, camera->horizon, &triangle->vertex[1]);
+	ProjectCameraVertex(c, width, height, camera->horizon, &triangle->vertex[2]);
+	ProjectedVertex *p = triangle->vertex;
+	triangle->area = Edge(p[0].x, p[0].y, p[1].x, p[1].y, p[2].x, p[2].y);
+	if(SDL_fabsf(triangle->area) < 0.0001f) return 0;
+	triangle->minX = max(0, (int)SDL_floorf(min(p[0].x, min(p[1].x, p[2].x))));
+	triangle->maxX = min(width - 1, (int)SDL_ceilf(max(p[0].x, max(p[1].x, p[2].x))));
+	triangle->minY = max(0, (int)SDL_floorf(min(p[0].y, min(p[1].y, p[2].y))));
+	triangle->maxY = min(height - 1, (int)SDL_ceilf(max(p[0].y, max(p[1].y, p[2].y))));
+	if(triangle->minX > triangle->maxX || triangle->minY > triangle->maxY) return 0;
+	triangle->material = material;
+	polygons.projectedCount++;
+	return 1;
 }
 
 static int TriangleFacesCamera(const PolygonTriangle *triangle, const Camera *camera) {
@@ -210,31 +361,42 @@ static Uint32 SampleMaterial(const PolygonMaterial *material, float u, float v) 
 
 		
 static int PrepareProjectedTriangles(Camera *camera, int width, int height) {
-	if(polygons.projectedCapacity < polygons.triangleCount) {
+	/* Near clipping can split one triangle into two. */
+	const int required = polygons.triangleCount * 2;
+	if(polygons.projectedCapacity < required) {
 		void *memory = SDL_realloc(polygons.projected,
-			(size_t)polygons.triangleCount * sizeof(*polygons.projected));
+			(size_t)required * sizeof(*polygons.projected));
 		if(!memory) return 0;
 		polygons.projected = memory;
-		polygons.projectedCapacity = polygons.triangleCount;
+		polygons.projectedCapacity = required;
 	}
 	polygons.projectedCount = 0;
 	for(int index = 0; index < polygons.triangleCount; index++) {
 		const PolygonTriangle *source = &polygons.triangles[index];
-		if(!TriangleFacesCamera(source,camera)) continue;
-		ProjectedTriangle *triangle = &polygons.projected[polygons.projectedCount];
-		if(!ProjectVertex(&source->vertex[0], camera, width, height, &triangle->vertex[0]) ||
-		   !ProjectVertex(&source->vertex[1], camera, width, height, &triangle->vertex[1]) ||
-		   !ProjectVertex(&source->vertex[2], camera, width, height, &triangle->vertex[2])) continue;
-		ProjectedVertex *p = triangle->vertex;
-		triangle->area = Edge(p[0].x, p[0].y, p[1].x, p[1].y, p[2].x, p[2].y);
-		if(SDL_fabsf(triangle->area) < 0.0001f) continue;
-		triangle->minX = max(0, (int)SDL_floorf(min(p[0].x, min(p[1].x, p[2].x))));
-		triangle->maxX = min(width - 1, (int)SDL_ceilf(max(p[0].x, max(p[1].x, p[2].x))));
-		triangle->minY = max(0, (int)SDL_floorf(min(p[0].y, min(p[1].y, p[2].y))));
-		triangle->maxY = min(height - 1, (int)SDL_ceilf(max(p[0].y, max(p[1].y, p[2].y))));
-		if(triangle->minX > triangle->maxX || triangle->minY > triangle->maxY) continue;
-		triangle->material = source->material;
-		polygons.projectedCount++;
+		if(!TriangleFacesCamera(source, camera)) continue;
+
+		CameraSpaceVertex eye[3] = {
+			ToCameraSpace(&source->vertex[0], camera),
+			ToCameraSpace(&source->vertex[1], camera),
+			ToCameraSpace(&source->vertex[2], camera)
+		};
+		if(eye[0].depth < POLYGON_NEAR_DEPTH &&
+			eye[1].depth < POLYGON_NEAR_DEPTH &&
+			eye[2].depth < POLYGON_NEAR_DEPTH)
+			continue;
+
+		CameraSpaceVertex clipped[4];
+		const int clipCount = ClipPolygonNear(eye, 3, clipped, POLYGON_NEAR_DEPTH);
+		if(clipCount < 3) continue;
+		EmitProjectedTriangle(
+			&clipped[0], &clipped[1], &clipped[2],
+			source->material, camera, width, height
+		);
+		if(clipCount == 4)
+			EmitProjectedTriangle(
+				&clipped[0], &clipped[2], &clipped[3],
+				source->material, camera, width, height
+			);
 	}
 	return 1;
 }

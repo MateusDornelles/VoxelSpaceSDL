@@ -4,6 +4,7 @@ project(VoxelSpaceSDL LANGUAGES C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Default single-config generators (Make/Ninja) to Release for runtime performance.
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)

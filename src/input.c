@@ -4,6 +4,7 @@
 #include "engine.h"
 #include "camera.h"
 #include "map.h"
+#include "polygon_renderer.h"
 #include "input.h"
 
 static int isOnTheGround = 0;
@@ -35,8 +36,18 @@ void Input_Update(void *ptr) {
 	if(PollControllers(cam, delta * 0.03f) || ProcessKeyboard(cam, delta * 0.03f))
 		map->redraw = 1;
 
+	float feetZ = cam->height - CAMERA_EYE_HEIGHT;
+	PolygonRenderer_ResolvePosition(
+		&cam->position.x, &cam->position.y,
+		feetZ, cam->height, INPUT_COLLISION_RADIUS
+	);
+
+	const float terrainHeight = (float)Map_GetHeight(map, &cam->position);
+	const float polygonHeight = PolygonRenderer_GetSupportHeight(
+		cam->position.x, cam->position.y
+	);
 	const float groundHeight =
-		(float)Map_GetHeight(map, &cam->position) + CAMERA_EYE_HEIGHT;
+		max(terrainHeight, polygonHeight) + CAMERA_EYE_HEIGHT;
 	if(!isOnTheGround) {
 		const float frameSeconds = delta * 0.001f;
 		velocity -= INPUT_GRAVITY_ACCELERATION * frameSeconds;
@@ -53,8 +64,13 @@ void Input_Update(void *ptr) {
 		isOnTheGround = 0;
 	}
 
-	// Pull the camera above terrain if it went below ground
+	// Pull the camera above terrain / polygon tops if it went below ground
 	cam->height = max(groundHeight, min(cam->height, CAMERA_HEIGHT_MAX));
+	feetZ = cam->height - CAMERA_EYE_HEIGHT;
+	PolygonRenderer_ResolvePosition(
+		&cam->position.x, &cam->position.y,
+		feetZ, cam->height, INPUT_COLLISION_RADIUS
+	);
 	// Reset camera angle after a full turn
 	if(SDL_fabsf(cam->angle) > M_PI * 2) cam->angle = 0;
 }

@@ -30,6 +30,12 @@ void PolygonRenderer_Init(Map *map);
 void PolygonRenderer_Destroy(void);
 void PolygonRenderer_Clear(void);
 int PolygonRenderer_AddTriangle(const PolygonTriangle *triangle);
+/* Axis-aligned solid used by movement collision (independent of draw triangles). */
+int PolygonRenderer_AddColliderBox(float x, float y, float z, float width, float depth, float height);
+/* Highest walkable polygon top under (x, y), or -FLT_MAX when none. */
+float PolygonRenderer_GetSupportHeight(float x, float y);
+/* Push (x, y) out of solid colliders that overlap the vertical capsule [feetZ, headZ]. */
+void PolygonRenderer_ResolvePosition(float *x, float *y, float feetZ, float headZ, float radius);
 void PolygonRenderer_DrawSoftware(Map *map, Camera *camera);
 
 #ifdef USE_OPENGL_RENDER
