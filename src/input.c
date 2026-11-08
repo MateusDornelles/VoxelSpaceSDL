@@ -9,9 +9,58 @@
 
 static int isOnTheGround = 0;
 static float velocity = 0.0f;
+static int isIsometric = 0;
+static float isoHeightOffset = CAMERA_ISO_HEIGHT;
+static struct {
+	float angle, horizon, height;
+} isoSaved;
+
+static void ToggleIsometricCamera(void);
 
 #include "input/kbmouse.c"
 #include "input/gamepad.c"
+
+static void ApplyIsometricCamera(Camera *cam, Map *map) {
+	const float terrainHeight = (float)Map_GetHeight(map, &cam->position);
+	const float polygonHeight = PolygonRenderer_GetSupportHeight(
+		cam->position.x, cam->position.y
+	);
+	const float support = max(terrainHeight, polygonHeight);
+	const float center = cam->maxhorizon * 0.5f;
+	const float extent =
+		(cam->maxhorizon / CAMERA_PROJECTION_SCALE) * SDL_tanf(CAMERA_MAX_PITCH);
+
+	/* Keep yaw free for mouse orbit; lock pitch and altitude. */
+	cam->horizon = center - extent * CAMERA_ISO_LOOK_DOWN;
+	cam->height = support + isoHeightOffset;
+	Camera_ClampPitch(cam);
+	velocity = 0.0f;
+	isOnTheGround = 1;
+}
+
+static void ToggleIsometricCamera(void) {
+	Map *map = NULL;
+	Camera *cam = NULL;
+	Engine_GetObjects(&cam, &map);
+	if(!isIsometric) {
+		isoSaved.angle = cam->angle;
+		isoSaved.horizon = cam->horizon;
+		isoSaved.height = cam->height;
+		isIsometric = 1;
+		isoHeightOffset = CAMERA_ISO_HEIGHT;
+		cam->angle = CAMERA_ISO_ANGLE;
+		ApplyIsometricCamera(cam, map);
+		SDL_Log("Isometric camera: on");
+	} else {
+		cam->angle = isoSaved.angle;
+		cam->horizon = isoSaved.horizon;
+		cam->height = isoSaved.height;
+		Camera_ClampPitch(cam);
+		isIsometric = 0;
+		SDL_Log("Isometric camera: off");
+	}
+	map->redraw = 1;
+}
 
 void Input_Start(void *ptr) {
 	(void)ptr;
@@ -22,6 +71,7 @@ void Input_Start(void *ptr) {
 	Camera_ResetPitch(cam);
 	isOnTheGround = 1;
 	velocity = 0.0f;
+	isIsometric = 0;
 	SetMouseGrab(1);
 	map->redraw = 1;
 }
@@ -71,6 +121,10 @@ void Input_Update(void *ptr) {
 		&cam->position.x, &cam->position.y,
 		feetZ, cam->height, INPUT_COLLISION_RADIUS
 	);
+	if(isIsometric) {
+		ApplyIsometricCamera(cam, map);
+		map->redraw = 1;
+	}
 	// Reset camera angle after a full turn
 	if(SDL_fabsf(cam->angle) > M_PI * 2) cam->angle = 0;
 }

@@ -360,6 +360,12 @@ int Engine_Start(EngineSettings *es) {
 			es->ceilingheightmap ? es->ceilingheightmap : es->heightmap
 		);
 	PolygonRenderer_Init(&ctx.map);
+	if(es->heightmap) {
+		char buildingsPath[512];
+		PolygonRenderer_BuildingsPathFromHeightmap(
+			es->heightmap, buildingsPath, sizeof(buildingsPath));
+		PolygonRenderer_LoadBuildings(&ctx.map, buildingsPath);
+	}
 	if(es->spritePath)
 		SpriteRenderer_AddAPNG(es->spritePath, es->spriteX, es->spriteY, es->spriteZ,
 			es->spriteWidth, es->spriteHeight);

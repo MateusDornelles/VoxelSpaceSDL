@@ -1,6 +1,7 @@
 #ifndef VSPOLYGONRENDERER_H
 #define VSPOLYGONRENDERER_H
 
+#include <stddef.h>
 #include "engine.h"
 
 typedef enum ePolygonMaterialType {
@@ -27,6 +28,10 @@ typedef struct sPolygonTriangle {
 } PolygonTriangle;
 
 void PolygonRenderer_Init(Map *map);
+/* Load axis-aligned buildings from a text file (x y width depth height material). */
+int PolygonRenderer_LoadBuildings(Map *map, const char *path);
+/* Derive "maps/foo.buildings" from a heightmap path like "maps/foo.png". */
+void PolygonRenderer_BuildingsPathFromHeightmap(const char *heightmap, char *out, size_t outSize);
 void PolygonRenderer_Destroy(void);
 void PolygonRenderer_Clear(void);
 int PolygonRenderer_AddTriangle(const PolygonTriangle *triangle);

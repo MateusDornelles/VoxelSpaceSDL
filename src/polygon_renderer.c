@@ -187,8 +187,83 @@ static void AddBox(float x, float y, float z, float width, float depth, float he
 	PolygonRenderer_AddColliderBox(x, y, z, width, depth, height);
 }
 
+void PolygonRenderer_BuildingsPathFromHeightmap(const char *heightmap, char *out, size_t outSize) {
+	if(!out || outSize == 0) return;
+	out[0] = '\0';
+	if(!heightmap || !heightmap[0]) return;
+	SDL_strlcpy(out, heightmap, outSize);
+	char *dot = SDL_strrchr(out, '.');
+	char *slash = SDL_strrchr(out, '/');
+	char *bslash = SDL_strrchr(out, '\\');
+	char *sep = slash > bslash ? slash : bslash;
+	if(dot && (!sep || dot > sep))
+		*dot = '\0';
+	SDL_strlcat(out, ".buildings", outSize);
+}
+
+int PolygonRenderer_LoadBuildings(Map *map, const char *path) {
+	if(!map || !map->ready || !path || !path[0]) return 0;
+	SDL_RWops *rw = SDL_RWFromFile(path, "r");
+	if(!rw) {
+		SDL_LogWarn(0, "Building list not found: %s", path);
+		return 0;
+	}
+
+	int buildingCount = 0;
+	const Sint64 size = SDL_RWsize(rw);
+	if(size <= 0 || size > 1 << 20) {
+		SDL_RWclose(rw);
+		return 0;
+	}
+	char *text = SDL_malloc((size_t)size + 1);
+	if(!text) {
+		SDL_RWclose(rw);
+		return 0;
+	}
+	if(SDL_RWread(rw, text, 1, (size_t)size) != (size_t)size) {
+		SDL_free(text);
+		SDL_RWclose(rw);
+		return 0;
+	}
+	text[size] = '\0';
+	SDL_RWclose(rw);
+
+	char *cursor = text;
+	while(*cursor) {
+		char *lineStart = cursor;
+		while(*cursor && *cursor != '\n' && *cursor != '\r') cursor++;
+		const char end = *cursor;
+		*cursor = '\0';
+		if(end == '\r' && cursor[1] == '\n') cursor += 2;
+		else if(end) cursor++;
+
+		while(*lineStart == ' ' || *lineStart == '\t') lineStart++;
+		if(!*lineStart || *lineStart == '#') continue;
+
+		float x = 0, y = 0, width = 0, depth = 0, height = 0;
+		int materialId = 0;
+		if(SDL_sscanf(lineStart, "%f %f %f %f %f %d",
+			&x, &y, &width, &depth, &height, &materialId) < 5)
+			continue;
+		if(width <= 0.0f || depth <= 0.0f || height <= 0.0f) continue;
+
+		Point sample = {x + width * 0.5f, y + depth * 0.5f};
+		const float base = (float)Map_GetHeight(map, &sample);
+		const PolygonMaterial *material = materialId ?
+			&polygons.texturedMaterial : &polygons.flatMaterial;
+		AddBox(x, y, base, width, depth, height, material);
+		buildingCount++;
+	}
+
+	SDL_free(text);
+	SDL_Log("Loaded %d polygon buildings from %s", buildingCount, path);
+	map->redraw = 1;
+	return buildingCount;
+}
+
 void PolygonRenderer_Init(Map *map) {
 	polygons.triangleCount = 0;
+	polygons.colliderCount = 0;
 #ifdef USE_AVX2
 	polygons.useAVX2 = SDL_HasAVX2();
 #endif
@@ -197,19 +272,10 @@ void PolygonRenderer_Init(Map *map) {
 	polygons.flatMaterial = (PolygonMaterial){POLYGON_MATERIAL_FLAT, 0xff4080d0u, NULL, 0, 0, 0};
 	polygons.texturedMaterial = (PolygonMaterial){POLYGON_MATERIAL_TEXTURED, 0xffffffffu,
 		polygons.checker, 8, 8, 0};
-	for(int index = 0; index < 10; index++) {
-		const int column = index % 2;
-		const int row = index / 2;
-		Point flat = {410.0f + (float)column * 125.0f, 650.0f - (float)row * 65.0f};
-		Point textured = {flat.x + 45.0f, flat.y};
-		const float flatGround = (float)Map_GetHeight(map, &flat);
-		const float texturedGround = (float)Map_GetHeight(map, &textured);
-		AddBox(flat.x, flat.y, flatGround, 36.0f, 36.0f, 45.0f, &polygons.flatMaterial);
-		AddBox(textured.x, textured.y, texturedGround, 36.0f, 36.0f, 45.0f,
-			&polygons.texturedMaterial);
-	}
 #ifdef USE_THREADED_RENDER
 	InitPolygonWorkers(map);
+#else
+	(void)map;
 #endif
 }
 

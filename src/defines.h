@@ -59,4 +59,7 @@
 #define CAMERA_ZSTEP_MIN 0.001f // Minimum Z-axis step
 #define CAMERA_ZSTEP_MAX 0.16f // Above this value, the image becomes a pixel mess
 #define CAMERA_ZSTEP_MOD 0.001f // This define name sounds intimidating
+#define CAMERA_ISO_ANGLE 0.78539816339f // Isometric yaw: 45 degrees
+#define CAMERA_ISO_HEIGHT 280.0f // Eye height above support while isometric
+#define CAMERA_ISO_LOOK_DOWN 0.92f // Fraction of max pitch looking down (0..1)
 #endif

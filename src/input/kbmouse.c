@@ -34,6 +34,10 @@ static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
 		case SDL_SCANCODE_F:
 			input[3] = code;
 			break;
+		case SDL_SCANCODE_H:
+		case SDL_SCANCODE_G:
+			input[2] = code;
+			break;
 		case SDL_SCANCODE_SPACE:
 			map->redraw = 1;
 			if(mod & KMOD_CTRL) {
@@ -65,6 +69,9 @@ static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
 			break;
 		case SDL_SCANCODE_I:
 			Engine_CycleIntegerScale();
+			break;
+		case SDL_SCANCODE_V:
+			ToggleIsometricCamera();
 			break;
 		case SDL_SCANCODE_F10:
 			Engine_ToggleRenderer();
@@ -99,6 +106,10 @@ static void ProcessKeyUp(SDL_Scancode code) {
 		case SDL_SCANCODE_F:
 			if(input[3] == code) input[3] = 0;
 			break;
+		case SDL_SCANCODE_H:
+		case SDL_SCANCODE_G:
+			if(input[2] == code) input[2] = 0;
+			break;
 		case SDL_SCANCODE_LSHIFT:
 			isSprintActive = 0;
 			break;
@@ -107,7 +118,7 @@ static void ProcessKeyUp(SDL_Scancode code) {
 }
 
 static int ProcessKeyboard(Camera *cam, float dm) {
-	if(input[3])
+	if(input[3] && !isIsometric)
 		Camera_Pitch(cam, (input[3] == SDL_SCANCODE_R ? -dm : dm));
 	const float speed = (dm / INPUT_WALK_SPEED_DIVISOR) *
 		(isSprintActive ? INPUT_SPRINT_MULTIPLIER : 1.0f);
@@ -118,6 +129,19 @@ static int ProcessKeyboard(Camera *cam, float dm) {
 	if(input[0]) {
 		const float direction = input[0] == SDL_SCANCODE_W ? -speed : speed;
 		Camera_MoveForward(cam, direction, 1);
+	}
+	if(input[2]) {
+		const float direction = input[2] == SDL_SCANCODE_H ? speed : -speed;
+		if(isIsometric) {
+			isoHeightOffset = max(
+				CAMERA_EYE_HEIGHT,
+				min(isoHeightOffset + direction * CAMERA_MOVE_STEP, CAMERA_HEIGHT_MAX)
+			);
+		} else {
+			Camera_StrafeVert(cam, direction);
+			if(direction > 0.0f)
+				isOnTheGround = 0;
+		}
 	}
 
 	/*
@@ -134,6 +158,11 @@ static void ProcessMouseMotion(Sint32 rx, Sint32 ry) {
 	Map *map = NULL;
 	Camera *cam = NULL;
 	Engine_GetObjects(&cam, &map);
+	if(isIsometric) {
+		cam->angle -= (float)rx * INPUT_MOUSE_SENS;
+		map->redraw = 1;
+		return;
+	}
 	cam->angle -= (float)rx * INPUT_MOUSE_SENS;
 	cam->horizon -= (float)ry * cam->maxhorizon * INPUT_MOUSE_SENS;
 	Camera_ClampPitch(cam);

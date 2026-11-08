@@ -6,6 +6,7 @@
 #define VSERROR_STRINGS
 #include "../error.h"
 #include "../map.h"
+#include "../polygon_renderer.h"
 
 char *droppedFile = NULL, droppedFileType = 0;
 
@@ -47,6 +48,15 @@ void DND_Event(void *ptr) {
 				Errors ret;
 				if((ret = Map_Open(map, diffuse, height)) != ERROR_OK)
 					SDL_LogError(0, "Failed to load map: %s", Errors_Strings[ret]);
+				else {
+					char buildingsPath[512];
+					PolygonRenderer_Clear();
+					PolygonRenderer_BuildingsPathFromHeightmap(
+						height, buildingsPath, sizeof(buildingsPath));
+					PolygonRenderer_LoadBuildings(map, buildingsPath);
+					cam->height = (float)Map_GetHeight(map, &cam->position) + CAMERA_EYE_HEIGHT;
+					map->redraw = 1;
+				}
 
 				SDL_free(ev->drop.file);
 				SDL_free(droppedFile);

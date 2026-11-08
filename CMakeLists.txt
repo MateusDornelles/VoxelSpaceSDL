@@ -42,6 +42,7 @@ if(EMSCRIPTEN)
 		"SHELL:-s ALLOW_MEMORY_GROWTH=1"
 		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/maps/ch2w.png@maps/ch2w.png"
 		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/maps/ch2.png@maps/ch2.png"
+		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/maps/ch2.buildings@maps/ch2.buildings"
 		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/maps/supe.apng@maps/supe.apng"
 	)
 	set_target_properties(vs PROPERTIES SUFFIX ".html")
