@@ -56,14 +56,25 @@ static struct {
 #endif
 #ifdef USE_THREADED_RENDER
 	SDL_Thread **workers;
+	int *workerIndices;
 	int workerCount;
 	SDL_mutex *workerMutex;
 	SDL_cond *workerCondition, *workerDone;
-	SDL_atomic_t workerGeneration, nextTile, workersPending, endWorkers;
+	SDL_atomic_t workerGeneration, nextTile, nextPrepare, workersPending, endWorkers;
 	struct {
+		ProjectedTriangle *tris;
+		int count, capacity;
+	} *prepareScratch;
+	int prepareScratchCount;
+	struct {
+		int phase; /* 1 = prepare, 2 = raster */
+		const PolygonTriangle *sourceTriangles;
+		int sourceTriangleCount;
+		Camera *camera;
+		int width, height;
 		Uint32 *pixels;
 		float *depth;
-		int width, height, pitch, tilesX, tileCount;
+		int pitch, tilesX, tileCount;
 	} job;
 #endif
 #ifdef USE_OPENGL_RENDER
@@ -397,11 +408,14 @@ static void ProjectCameraVertex(
 
 static int EmitProjectedTriangle(
 	const CameraSpaceVertex *a, const CameraSpaceVertex *b, const CameraSpaceVertex *c,
-	const PolygonMaterial *material, const Camera *camera, int width, int height
+	const PolygonMaterial *material, const Camera *camera, int width, int height,
+	ProjectedTriangle *out, int *outCount, int outCapacity
 ) {
 	if(a->depth >= camera->distance && b->depth >= camera->distance && c->depth >= camera->distance)
 		return 0;
-	ProjectedTriangle *triangle = &polygons.projected[polygons.projectedCount];
+	if(*outCount >= outCapacity)
+		return 0;
+	ProjectedTriangle *triangle = &out[*outCount];
 	ProjectCameraVertex(a, width, height, camera->horizon, &triangle->vertex[0]);
 	ProjectCameraVertex(b, width, height, camera->horizon, &triangle->vertex[1]);
 	ProjectCameraVertex(c, width, height, camera->horizon, &triangle->vertex[2]);
@@ -414,7 +428,7 @@ static int EmitProjectedTriangle(
 	triangle->maxY = min(height - 1, (int)SDL_ceilf(max(p[0].y, max(p[1].y, p[2].y))));
 	if(triangle->minX > triangle->maxX || triangle->minY > triangle->maxY) return 0;
 	triangle->material = material;
-	polygons.projectedCount++;
+	(*outCount)++;
 	return 1;
 }
 
@@ -438,24 +452,38 @@ static Uint32 SampleMaterial(const PolygonMaterial *material, float u, float v) 
 	return material->texture[y * material->textureWidth + x];
 }
 
-		
-static int PrepareProjectedTriangles(
+#define POLYGON_PREPARE_CHUNK 512
+#define POLYGON_JOB_PREPARE 1
+#define POLYGON_JOB_RASTER 2
+
+static int EnsureProjectedCapacity(ProjectedTriangle **tris, int *capacity, int required) {
+	if(required <= *capacity)
+		return 1;
+	int next = *capacity ? *capacity * 2 : 64;
+	while(next < required)
+		next *= 2;
+	void *memory = SDL_realloc(*tris, (size_t)next * sizeof(**tris));
+	if(!memory)
+		return 0;
+	*tris = memory;
+	*capacity = next;
+	return 1;
+}
+
+/* Near clipping can split one source triangle into two projected triangles. */
+static void PrepareTriangleRange(
 	Camera *camera, int width, int height,
-	const PolygonTriangle *triangles, int triangleCount
+	const PolygonTriangle *triangles, int begin, int end,
+	ProjectedTriangle **outTris, int *outCount, int *outCapacity
 ) {
-	/* Near clipping can split one triangle into two. */
-	const int required = triangleCount * 2;
-	if(polygons.projectedCapacity < required) {
-		void *memory = SDL_realloc(polygons.projected,
-			(size_t)required * sizeof(*polygons.projected));
-		if(!memory) return 0;
-		polygons.projected = memory;
-		polygons.projectedCapacity = required;
-	}
-	polygons.projectedCount = 0;
-	for(int index = 0; index < triangleCount; index++) {
+	if(begin >= end)
+		return;
+	if(!EnsureProjectedCapacity(outTris, outCapacity, *outCount + (end - begin) * 2))
+		return;
+	for(int index = begin; index < end; index++) {
 		const PolygonTriangle *source = &triangles[index];
-		if(!source->material || !TriangleFacesCamera(source, camera)) continue;
+		if(!source->material || !TriangleFacesCamera(source, camera))
+			continue;
 
 		CameraSpaceVertex eye[3] = {
 			ToCameraSpace(&source->vertex[0], camera),
@@ -469,18 +497,20 @@ static int PrepareProjectedTriangles(
 
 		CameraSpaceVertex clipped[4];
 		const int clipCount = ClipPolygonNear(eye, 3, clipped, POLYGON_NEAR_DEPTH);
-		if(clipCount < 3) continue;
+		if(clipCount < 3)
+			continue;
 		EmitProjectedTriangle(
 			&clipped[0], &clipped[1], &clipped[2],
-			source->material, camera, width, height
+			source->material, camera, width, height,
+			*outTris, outCount, *outCapacity
 		);
 		if(clipCount == 4)
 			EmitProjectedTriangle(
 				&clipped[0], &clipped[2], &clipped[3],
-				source->material, camera, width, height
+				source->material, camera, width, height,
+				*outTris, outCount, *outCapacity
 			);
 	}
-	return 1;
 }
 
 static inline void RasterizePixel(const ProjectedTriangle *triangle,
@@ -576,6 +606,22 @@ static void RasterizeTile(Uint32 *pixels, float *depthBuffer, int pitch, int dep
 }
 
 #ifdef USE_THREADED_RENDER
+static void ConsumePrepareRanges(int scratchIndex) {
+	while(1) {
+		const int begin = SDL_AtomicAdd(&polygons.nextPrepare, POLYGON_PREPARE_CHUNK);
+		if(begin >= polygons.job.sourceTriangleCount)
+			return;
+		const int end = min(begin + POLYGON_PREPARE_CHUNK, polygons.job.sourceTriangleCount);
+		PrepareTriangleRange(
+			polygons.job.camera, polygons.job.width, polygons.job.height,
+			polygons.job.sourceTriangles, begin, end,
+			&polygons.prepareScratch[scratchIndex].tris,
+			&polygons.prepareScratch[scratchIndex].count,
+			&polygons.prepareScratch[scratchIndex].capacity
+		);
+	}
+}
+
 static void ConsumePolygonTiles(void) {
 	while(1) {
 		const int tile = SDL_AtomicAdd(&polygons.nextTile, 1);
@@ -589,8 +635,16 @@ static void ConsumePolygonTiles(void) {
 	}
 }
 
-static int PolygonWorker(void *unused) {
-	(void)unused;
+static void RunPolygonJob(int scratchIndex) {
+	SDL_MemoryBarrierAcquire();
+	if(polygons.job.phase == POLYGON_JOB_PREPARE)
+		ConsumePrepareRanges(scratchIndex);
+	else
+		ConsumePolygonTiles();
+}
+
+static int PolygonWorker(void *arg) {
+	const int workerIndex = *(const int *)arg;
 	int generation = SDL_AtomicGet(&polygons.workerGeneration);
 	while(1) {
 		SDL_LockMutex(polygons.workerMutex);
@@ -600,8 +654,7 @@ static int PolygonWorker(void *unused) {
 		SDL_UnlockMutex(polygons.workerMutex);
 		if(SDL_AtomicGet(&polygons.endWorkers)) break;
 		generation = SDL_AtomicGet(&polygons.workerGeneration);
-		SDL_MemoryBarrierAcquire();
-		ConsumePolygonTiles();
+		RunPolygonJob(workerIndex);
 		if(SDL_AtomicAdd(&polygons.workersPending, -1) - 1 == 0) {
 			SDL_LockMutex(polygons.workerMutex);
 			SDL_CondSignal(polygons.workerDone);
@@ -609,6 +662,61 @@ static int PolygonWorker(void *unused) {
 		}
 	}
 	return 0;
+}
+
+static int MergePrepareScratches(void) {
+	int total = 0;
+	for(int i = 0; i < polygons.prepareScratchCount; i++)
+		total += polygons.prepareScratch[i].count;
+	if(!EnsureProjectedCapacity(&polygons.projected, &polygons.projectedCapacity, total))
+		return 0;
+	int offset = 0;
+	for(int i = 0; i < polygons.prepareScratchCount; i++) {
+		const int count = polygons.prepareScratch[i].count;
+		if(count > 0) {
+			SDL_memcpy(
+				polygons.projected + offset,
+				polygons.prepareScratch[i].tris,
+				(size_t)count * sizeof(*polygons.projected)
+			);
+			offset += count;
+			polygons.prepareScratch[i].count = 0;
+		}
+	}
+	polygons.projectedCount = total;
+	return 1;
+}
+
+static int PrepareProjectedTrianglesParallel(
+	Camera *camera, int width, int height,
+	const PolygonTriangle *triangles, int triangleCount
+) {
+	for(int i = 0; i < polygons.prepareScratchCount; i++)
+		polygons.prepareScratch[i].count = 0;
+
+	polygons.job.phase = POLYGON_JOB_PREPARE;
+	polygons.job.sourceTriangles = triangles;
+	polygons.job.sourceTriangleCount = triangleCount;
+	polygons.job.camera = camera;
+	polygons.job.width = width;
+	polygons.job.height = height;
+	SDL_AtomicSet(&polygons.nextPrepare, 0);
+	SDL_AtomicSet(&polygons.workersPending, polygons.workerCount);
+	SDL_MemoryBarrierRelease();
+	SDL_LockMutex(polygons.workerMutex);
+	SDL_AtomicAdd(&polygons.workerGeneration, 1);
+	SDL_CondBroadcast(polygons.workerCondition);
+	SDL_UnlockMutex(polygons.workerMutex);
+
+	/* Main thread uses the last scratch slot (workerCount). */
+	RunPolygonJob(polygons.workerCount);
+
+	SDL_LockMutex(polygons.workerMutex);
+	while(SDL_AtomicGet(&polygons.workersPending) > 0)
+		SDL_CondWait(polygons.workerDone, polygons.workerMutex);
+	SDL_UnlockMutex(polygons.workerMutex);
+
+	return MergePrepareScratches();
 }
 
 static void InitPolygonWorkers(Map *map) {
@@ -622,13 +730,34 @@ static void InitPolygonWorkers(Map *map) {
 		return;
 	}
 	polygons.workers = SDL_calloc((size_t)polygons.workerCount, sizeof(*polygons.workers));
-	if(!polygons.workers) { polygons.workerCount = 0; return; }
+	polygons.workerIndices = SDL_calloc((size_t)polygons.workerCount, sizeof(*polygons.workerIndices));
+	/* One scratch per worker + one for the main thread. */
+	polygons.prepareScratchCount = polygons.workerCount + 1;
+	polygons.prepareScratch = SDL_calloc(
+		(size_t)polygons.prepareScratchCount, sizeof(*polygons.prepareScratch));
+	if(!polygons.workers || !polygons.workerIndices || !polygons.prepareScratch) {
+		SDL_free(polygons.workers);
+		SDL_free(polygons.workerIndices);
+		SDL_free(polygons.prepareScratch);
+		polygons.workers = NULL;
+		polygons.workerIndices = NULL;
+		polygons.prepareScratch = NULL;
+		polygons.workerCount = 0;
+		polygons.prepareScratchCount = 0;
+		return;
+	}
 	SDL_AtomicSet(&polygons.endWorkers, 0);
 	for(int i = 0; i < polygons.workerCount; i++) {
-		polygons.workers[i] = SDL_CreateThread(PolygonWorker, "polygon-render", NULL);
-		if(!polygons.workers[i]) { polygons.workerCount = i; break; }
+		polygons.workerIndices[i] = i;
+		polygons.workers[i] = SDL_CreateThread(
+			PolygonWorker, "polygon-render", &polygons.workerIndices[i]);
+		if(!polygons.workers[i]) {
+			polygons.workerCount = i;
+			polygons.prepareScratchCount = polygons.workerCount + 1;
+			break;
+		}
 	}
-	SDL_Log("Polygon software renderer: %d worker thread(s), %dx%d tiles",
+	SDL_Log("Polygon software renderer: %d worker thread(s), %dx%d tiles, parallel prepare",
 		polygons.workerCount, POLYGON_TILE_SIZE, POLYGON_TILE_SIZE);
 }
 
@@ -638,11 +767,34 @@ static void DestroyPolygonWorkers(void) {
 		SDL_AtomicAdd(&polygons.workerGeneration,1);SDL_CondBroadcast(polygons.workerCondition);SDL_UnlockMutex(polygons.workerMutex);
 	}
 	for(int i=0;i<polygons.workerCount;i++)if(polygons.workers[i])SDL_WaitThread(polygons.workers[i],NULL);
-	SDL_free(polygons.workers);polygons.workers=NULL;polygons.workerCount=0;
+	SDL_free(polygons.workers);polygons.workers=NULL;
+	SDL_free(polygons.workerIndices);polygons.workerIndices=NULL;
+	for(int i = 0; i < polygons.prepareScratchCount; i++)
+		SDL_free(polygons.prepareScratch[i].tris);
+	SDL_free(polygons.prepareScratch);
+	polygons.prepareScratch = NULL;
+	polygons.prepareScratchCount = 0;
+	polygons.workerCount=0;
 	if(polygons.workerDone)SDL_DestroyCond(polygons.workerDone);if(polygons.workerCondition)SDL_DestroyCond(polygons.workerCondition);if(polygons.workerMutex)SDL_DestroyMutex(polygons.workerMutex);
 	polygons.workerDone=polygons.workerCondition=NULL;polygons.workerMutex=NULL;
 }
 #endif
+
+static int PrepareProjectedTriangles(
+	Camera *camera, int width, int height,
+	const PolygonTriangle *triangles, int triangleCount
+) {
+#ifdef USE_THREADED_RENDER
+	if(polygons.workerCount > 0 && polygons.prepareScratchCount > 0)
+		return PrepareProjectedTrianglesParallel(camera, width, height, triangles, triangleCount);
+#endif
+	polygons.projectedCount = 0;
+	PrepareTriangleRange(
+		camera, width, height, triangles, 0, triangleCount,
+		&polygons.projected, &polygons.projectedCount, &polygons.projectedCapacity
+	);
+	return 1;
+}
 
 void PolygonRenderer_DrawTriangleList(
 	Map *map, Camera *camera, const PolygonTriangle *triangles, int triangleCount
@@ -658,6 +810,7 @@ void PolygonRenderer_DrawTriangleList(
 	const int pitch = pitchBytes / (int)sizeof(*pixels);
 #ifdef USE_THREADED_RENDER
 	if(polygons.workerCount > 0) {
+		polygons.job.phase = POLYGON_JOB_RASTER;
 		polygons.job.pixels=pixels;polygons.job.depth=map->depth;
 		polygons.job.width=width;polygons.job.height=height;polygons.job.pitch=pitch;
 		polygons.job.tilesX=(width+POLYGON_TILE_SIZE-1)/POLYGON_TILE_SIZE;
@@ -665,7 +818,7 @@ void PolygonRenderer_DrawTriangleList(
 		SDL_AtomicSet(&polygons.nextTile,0);SDL_AtomicSet(&polygons.workersPending,polygons.workerCount);
 		SDL_MemoryBarrierRelease();SDL_LockMutex(polygons.workerMutex);SDL_AtomicAdd(&polygons.workerGeneration,1);
 		SDL_CondBroadcast(polygons.workerCondition);SDL_UnlockMutex(polygons.workerMutex);
-		ConsumePolygonTiles();
+		RunPolygonJob(0);
 		SDL_LockMutex(polygons.workerMutex);while(SDL_AtomicGet(&polygons.workersPending)>0)SDL_CondWait(polygons.workerDone,polygons.workerMutex);SDL_UnlockMutex(polygons.workerMutex);
 	} else
 #endif
