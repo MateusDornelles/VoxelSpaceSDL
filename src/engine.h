@@ -14,6 +14,11 @@ typedef enum eRendererBackend {
 	RENDERER_OPENGL
 } RendererBackend;
 
+typedef enum eTerrainRenderMode {
+	TERRAIN_RAYCAST,
+	TERRAIN_POLYGONS
+} TerrainRenderMode;
+
 typedef struct sEngineSettings {
 	int vsync, width, height;
 	int integerScale;
@@ -50,6 +55,9 @@ void Engine_End(void);
 void Engine_ToggleFullscreen(void);
 void Engine_ToggleRenderer(void);
 void Engine_CycleIntegerScale(void);
+void Engine_SetTerrainMode(TerrainRenderMode mode);
+TerrainRenderMode Engine_GetTerrainMode(void);
+void Engine_ToggleTerrainMode(void);
 void *Engine_GetWindow(void);
 void Engine_GetObjects(Camera **cam, Map **map);
 float Engine_GetDeltaTime(void);

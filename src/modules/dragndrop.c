@@ -7,6 +7,7 @@
 #include "../error.h"
 #include "../map.h"
 #include "../polygon_renderer.h"
+#include "../terrain_mesh.h"
 
 char *droppedFile = NULL, droppedFileType = 0;
 
@@ -54,6 +55,7 @@ void DND_Event(void *ptr) {
 					PolygonRenderer_BuildingsPathFromHeightmap(
 						height, buildingsPath, sizeof(buildingsPath));
 					PolygonRenderer_LoadBuildings(map, buildingsPath);
+					TerrainMesh_Build(map, TERRAIN_MESH_STEP_DEFAULT);
 					cam->height = (float)Map_GetHeight(map, &cam->position) + CAMERA_EYE_HEIGHT;
 					map->redraw = 1;
 				}

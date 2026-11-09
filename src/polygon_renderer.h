@@ -42,10 +42,20 @@ float PolygonRenderer_GetSupportHeight(float x, float y);
 /* Push (x, y) out of solid colliders that overlap the vertical capsule [feetZ, headZ]. */
 void PolygonRenderer_ResolvePosition(float *x, float *y, float feetZ, float headZ, float radius);
 void PolygonRenderer_DrawSoftware(Map *map, Camera *camera);
+/* Project and rasterize an arbitrary triangle list into the map screen/depth buffers. */
+void PolygonRenderer_DrawTriangleList(
+	Map *map, Camera *camera, const PolygonTriangle *triangles, int triangleCount);
 
 #ifdef USE_OPENGL_RENDER
 int PolygonRenderer_InitOpenGL(void);
 void PolygonRenderer_DrawOpenGL(Camera *camera, int width, int height);
+void PolygonRenderer_DrawTriangleListOpenGL(
+	Camera *camera, int width, int height, const PolygonTriangle *triangles, int triangleCount);
+/* Upload a static GPU mesh (e.g. terrain). Replaces any previous static mesh. */
+void PolygonRenderer_UploadStaticMeshOpenGL(const PolygonTriangle *triangles, int triangleCount);
+void PolygonRenderer_ClearStaticMeshOpenGL(void);
+int PolygonRenderer_HasStaticMeshOpenGL(void);
+void PolygonRenderer_DrawStaticMeshOpenGL(Camera *camera, int width, int height);
 void PolygonRenderer_DestroyOpenGL(void);
 #endif
 

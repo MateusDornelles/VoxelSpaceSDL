@@ -67,6 +67,8 @@ static inline Uint8 Map_GetHeight(Map *map, Point *p) {
 	return map->altitude[offset];
 }
 void Map_Draw(Map *map, Camera *cam);
+/* Clear screen to sky and depth to far — used when terrain is drawn as polygons. */
+void Map_ClearSoftwareFrame(Map *map);
 float *Map_GetDepthBuffer(Map *map, int *width, int *height);
 void Map_Close(Map *map);
 #endif

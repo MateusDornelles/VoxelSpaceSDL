@@ -1,8 +1,10 @@
 #ifdef USE_OPENGL_RENDER
 #include "opengl_renderer.h"
 #include "defines.h"
+#include "engine.h"
 #include "polygon_renderer.h"
 #include "sprite_renderer.h"
+#include "terrain_mesh.h"
 #include <SDL_log.h>
 #include <SDL_stdinc.h>
 #include <stddef.h>
@@ -115,13 +117,17 @@ void OpenGLRenderer_Resize(int w,int h,int outputWidth,int outputHeight,int inte
 void OpenGLRenderer_Draw(Map*m,Camera*c){
 	glBindFramebuffer(GL_FRAMEBUFFER,glr.sceneFbo);glViewport(0,0,glr.width,glr.height);
 	glClearColor(144.f/255,224.f/255,1,1);glClearDepth(1.0);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);if(!m->ready){glBindFramebuffer(GL_FRAMEBUFFER,0);glViewport(0,0,glr.outputWidth,glr.outputHeight);glClear(GL_COLOR_BUFFER_BIT);return;}SyncTextures(m);
-	glUseProgram(glr.mapProgram);glUniform2f(glGetUniformLocation(glr.mapProgram,"resolution"),glr.width,glr.height);
-	glUniform2f(glGetUniformLocation(glr.mapProgram,"cameraPosition"),c->position.x,c->position.y);
-	U1f("cameraHeight",c->height);U1f("horizon",c->horizon);U1f("angle",c->angle);U1f("distance",c->distance);U1f("zstep",c->zstep);
-	U1f("ceilingBase",m->ceilingBase);U1f("optimizeDistance",m->optdist);U1i("floorSize",m->width);U1i("ceilingSize",m->ceilingWidth);
-	U1i("ceilingEnabled",m->ceilingReady&&m->ceilingEnabled);U1i("optimize",m->optimize);
-	const char*n[4]={"floorColor","floorHeight","ceilingColor","ceilingHeight"};for(int i=0;i<4;i++){glActiveTexture(GL_TEXTURE0+i);glBindTexture(GL_TEXTURE_2D,glr.tex[i]);U1i(n[i],i);}
-	glBindVertexArray(glr.mapVao);glDrawArrays(GL_TRIANGLES,0,3);glBindVertexArray(0);m->redraw=0;
+	if(Engine_GetTerrainMode()==TERRAIN_RAYCAST){
+		glUseProgram(glr.mapProgram);glUniform2f(glGetUniformLocation(glr.mapProgram,"resolution"),glr.width,glr.height);
+		glUniform2f(glGetUniformLocation(glr.mapProgram,"cameraPosition"),c->position.x,c->position.y);
+		U1f("cameraHeight",c->height);U1f("horizon",c->horizon);U1f("angle",c->angle);U1f("distance",c->distance);U1f("zstep",c->zstep);
+		U1f("ceilingBase",m->ceilingBase);U1f("optimizeDistance",m->optdist);U1i("floorSize",m->width);U1i("ceilingSize",m->ceilingWidth);
+		U1i("ceilingEnabled",m->ceilingReady&&m->ceilingEnabled);U1i("optimize",m->optimize);
+		const char*n[4]={"floorColor","floorHeight","ceilingColor","ceilingHeight"};for(int i=0;i<4;i++){glActiveTexture(GL_TEXTURE0+i);glBindTexture(GL_TEXTURE_2D,glr.tex[i]);U1i(n[i],i);}
+		glBindVertexArray(glr.mapVao);glDrawArrays(GL_TRIANGLES,0,3);glBindVertexArray(0);
+	}else
+		TerrainMesh_DrawOpenGL(c,glr.width,glr.height);
+	m->redraw=0;
 	PolygonRenderer_DrawOpenGL(c,glr.width,glr.height);
 	SpriteRenderer_DrawOpenGL(c,glr.width,glr.height);
 	glBindFramebuffer(GL_READ_FRAMEBUFFER,glr.sceneFbo);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,0);

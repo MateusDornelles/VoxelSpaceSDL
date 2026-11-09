@@ -19,6 +19,10 @@
 #ifdef USE_OPENGL_RENDER
 #define GL_GLEXT_PROTOTYPES
 #include <SDL_opengl.h>
+
+typedef struct sGLPolygonVertex {
+	float position[3], uv[2], color[4], textured;
+} GLPolygonVertex;
 #endif
 
 typedef struct sProjectedVertex {
@@ -66,6 +70,15 @@ static struct {
 	GLuint program, vao, vbo, texture;
 	const Uint32 *uploadedTexture;
 	int uploadedTextureWidth, uploadedTextureHeight;
+	GLPolygonVertex *batchVertices;
+	int batchCapacity;
+	GLuint staticVao, staticVbo, staticTex;
+	int staticVertexCount;
+	int staticSourceTriangleCount;
+	const Uint32 *staticTexture;
+	int staticTextureWidth, staticTextureHeight;
+	const Uint32 *staticUploadedPixels;
+	int staticUploadedWidth, staticUploadedHeight;
 #endif
 } polygons;
 
@@ -426,9 +439,12 @@ static Uint32 SampleMaterial(const PolygonMaterial *material, float u, float v) 
 }
 
 		
-static int PrepareProjectedTriangles(Camera *camera, int width, int height) {
+static int PrepareProjectedTriangles(
+	Camera *camera, int width, int height,
+	const PolygonTriangle *triangles, int triangleCount
+) {
 	/* Near clipping can split one triangle into two. */
-	const int required = polygons.triangleCount * 2;
+	const int required = triangleCount * 2;
 	if(polygons.projectedCapacity < required) {
 		void *memory = SDL_realloc(polygons.projected,
 			(size_t)required * sizeof(*polygons.projected));
@@ -437,9 +453,9 @@ static int PrepareProjectedTriangles(Camera *camera, int width, int height) {
 		polygons.projectedCapacity = required;
 	}
 	polygons.projectedCount = 0;
-	for(int index = 0; index < polygons.triangleCount; index++) {
-		const PolygonTriangle *source = &polygons.triangles[index];
-		if(!TriangleFacesCamera(source, camera)) continue;
+	for(int index = 0; index < triangleCount; index++) {
+		const PolygonTriangle *source = &triangles[index];
+		if(!source->material || !TriangleFacesCamera(source, camera)) continue;
 
 		CameraSpaceVertex eye[3] = {
 			ToCameraSpace(&source->vertex[0], camera),
@@ -628,12 +644,16 @@ static void DestroyPolygonWorkers(void) {
 }
 #endif
 
-void PolygonRenderer_DrawSoftware(Map *map, Camera *camera) {
-	if(!map->screen || !map->depth) return;
+void PolygonRenderer_DrawTriangleList(
+	Map *map, Camera *camera, const PolygonTriangle *triangles, int triangleCount
+) {
+	if(!map || !map->screen || !map->depth || !triangles || triangleCount <= 0) return;
 	int width = 0, height = 0, pitchBytes = 0;
 	Uint32 *pixels = NULL;
 	SDL_QueryTexture((SDL_Texture *)map->screen, NULL, NULL, &width, &height);
-	if(!PrepareProjectedTriangles(camera, width, height) || polygons.projectedCount == 0) return;
+	if(!PrepareProjectedTriangles(camera, width, height, triangles, triangleCount) ||
+		polygons.projectedCount == 0)
+		return;
 	if(SDL_LockTexture((SDL_Texture *)map->screen, NULL, (void **)&pixels, &pitchBytes) != 0) return;
 	const int pitch = pitchBytes / (int)sizeof(*pixels);
 #ifdef USE_THREADED_RENDER
@@ -653,9 +673,11 @@ void PolygonRenderer_DrawSoftware(Map *map, Camera *camera) {
 	SDL_UnlockTexture((SDL_Texture *)map->screen);
 }
 
-#ifdef USE_OPENGL_RENDER
-typedef struct sGLPolygonVertex { float position[3], uv[2], color[4], textured; } GLPolygonVertex;
+void PolygonRenderer_DrawSoftware(Map *map, Camera *camera) {
+	PolygonRenderer_DrawTriangleList(map, camera, polygons.triangles, polygons.triangleCount);
+}
 
+#ifdef USE_OPENGL_RENDER
 static GLuint CompilePolygonShader(GLenum type, const char *source) {
 	GLuint shader = glCreateShader(type); glShaderSource(shader, 1, &source, NULL); glCompileShader(shader);
 	GLint ok = 0; glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
@@ -663,11 +685,110 @@ static GLuint CompilePolygonShader(GLenum type, const char *source) {
 	return shader;
 }
 
+static void BindPolygonVertexAttributes(void) {
+	const GLsizei stride = (GLsizei)sizeof(GLPolygonVertex);
+	for(int i = 0; i < 4; i++)
+		glEnableVertexAttribArray(i);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(GLPolygonVertex, position));
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(GLPolygonVertex, uv));
+	glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(GLPolygonVertex, color));
+	glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(GLPolygonVertex, textured));
+}
+
+static void PackGLVertex(GLPolygonVertex *out, const PolygonVertex *vertex, const PolygonMaterial *material) {
+	out->position[0] = vertex->x;
+	out->position[1] = vertex->y;
+	out->position[2] = vertex->z;
+	out->uv[0] = vertex->u;
+	out->uv[1] = vertex->v;
+	/* Map/building colors are packed as 0xAARRGGBB in CPU memory (same as software). */
+	const Uint32 c = material->color;
+	out->color[0] = (float)((c >> 16) & 255) / 255.0f;
+	out->color[1] = (float)((c >> 8) & 255) / 255.0f;
+	out->color[2] = (float)(c & 255) / 255.0f;
+	/* Heightmap texels often store alpha as 0; force opaque for the GL color path. */
+	out->color[3] = 1.0f;
+	out->textured = material->type == POLYGON_MATERIAL_TEXTURED ? 1.0f : 0.0f;
+}
+
+static int EnsureBatchCapacity(int required) {
+	if(required <= polygons.batchCapacity)
+		return 1;
+	int capacity = polygons.batchCapacity ? polygons.batchCapacity * 2 : 1024;
+	while(capacity < required)
+		capacity *= 2;
+	void *memory = SDL_realloc(polygons.batchVertices, (size_t)capacity * sizeof(*polygons.batchVertices));
+	if(!memory)
+		return 0;
+	polygons.batchVertices = memory;
+	polygons.batchCapacity = capacity;
+	return 1;
+}
+
+static void BindPolygonProgram(Camera *camera, int width, int height) {
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LESS);
+	/* No GL_CULL_FACE: the custom clip projection can flip winding vs world-space
+	   CCW, so hardware cull would drop the terrain static mesh. Buildings still
+	   use CPU TriangleFacesCamera before batching. */
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_BLEND);
+	glUseProgram(polygons.program);
+	glUniform2f(glGetUniformLocation(polygons.program, "cameraPosition"),
+		camera->position.x, camera->position.y);
+	glUniform2f(glGetUniformLocation(polygons.program, "resolution"),
+		(float)width, (float)height);
+	glUniform1f(glGetUniformLocation(polygons.program, "cameraHeight"), camera->height);
+	glUniform1f(glGetUniformLocation(polygons.program, "horizon"), camera->horizon);
+	glUniform1f(glGetUniformLocation(polygons.program, "angle"), camera->angle);
+	glUniform1f(glGetUniformLocation(polygons.program, "distance"), camera->distance);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, polygons.texture);
+	glUniform1i(glGetUniformLocation(polygons.program, "polygonTexture"), 0);
+}
+
+static void UnbindPolygonProgram(void) {
+	glBindVertexArray(0);
+	glDisable(GL_DEPTH_TEST);
+}
+
+static void FlushPolygonBatch(int vertexCount) {
+	if(vertexCount <= 0)
+		return;
+	glBufferData(GL_ARRAY_BUFFER,
+		(GLsizeiptr)((size_t)vertexCount * sizeof(GLPolygonVertex)),
+		polygons.batchVertices, GL_STREAM_DRAW);
+	glDrawArrays(GL_TRIANGLES, 0, vertexCount);
+}
+
 int PolygonRenderer_InitOpenGL(void) {
 	for(int y = 0; y < 8; y++) for(int x = 0; x < 8; x++)
 		polygons.checker[y * 8 + x] = ((x ^ y) & 1) ? 0xffd8b060u : 0xff704020u;
-	static const char *vs = "#version 330 core\nlayout(location=0)in vec3 p;layout(location=1)in vec2 uv;layout(location=2)in vec4 color;layout(location=3)in float textured;uniform vec2 cameraPosition,resolution;uniform float cameraHeight,horizon,angle,distance;out vec2 fuv;out vec4 fc;flat out float ft;void main(){float s=sin(angle),c=cos(angle);vec2 d=p.xy-cameraPosition;float z=-s*d.x-c*d.y,l=c*d.x-s*d.y;float ny=(1.-2.*horizon/resolution.y)*z-(2./2.5)*(cameraHeight-p.z);float n=1.,f=distance;gl_Position=vec4(l,ny,((f+n)/(f-n))*z-(2.*f*n/(f-n)),z);fuv=uv;fc=color;ft=textured;}";
-	static const char *fs = "#version 330 core\nuniform sampler2D polygonTexture;in vec2 fuv;in vec4 fc;flat in float ft;out vec4 outColor;void main(){outColor=ft>.5?texture(polygonTexture,fuv)*fc:fc;}";
+	/* Match map.c / raymarch fog: smoothstep(distance*0.5833, distance*0.9667, z) → sky. */
+	static const char *vs =
+		"#version 330 core\n"
+		"layout(location=0)in vec3 p;layout(location=1)in vec2 uv;"
+		"layout(location=2)in vec4 color;layout(location=3)in float textured;"
+		"uniform vec2 cameraPosition,resolution;"
+		"uniform float cameraHeight,horizon,angle,distance;"
+		"out vec2 fuv;out vec4 fc;flat out float ft;out float fz;"
+		"void main(){"
+		"float s=sin(angle),c=cos(angle);vec2 d=p.xy-cameraPosition;"
+		"float z=-s*d.x-c*d.y,l=c*d.x-s*d.y;"
+		"float ny=(1.-2.*horizon/resolution.y)*z-(2./2.5)*(cameraHeight-p.z);"
+		"float n=1.,f=distance;"
+		"gl_Position=vec4(l,ny,((f+n)/(f-n))*z-(2.*f*n/(f-n)),z);"
+		"fuv=uv;fc=color;ft=textured;fz=z;}";
+	static const char *fs =
+		"#version 330 core\n"
+		"uniform sampler2D polygonTexture;uniform float distance;"
+		"in vec2 fuv;in vec4 fc;flat in float ft;in float fz;out vec4 outColor;"
+		"vec3 fog(vec3 c,float z){"
+		"float t=smoothstep(distance*.5833,distance*.9667,z);"
+		"return mix(c,vec3(144.,224.,255.)/255.,t);}"
+		"void main(){"
+		"vec4 base=ft>.5?texture(polygonTexture,fuv)*fc:fc;"
+		"outColor=vec4(fog(base.rgb,fz),base.a);}";
 	GLuint vertex = CompilePolygonShader(GL_VERTEX_SHADER, vs), fragment = CompilePolygonShader(GL_FRAGMENT_SHADER, fs);
 	if(!vertex || !fragment) return 1;
 	polygons.program = glCreateProgram(); glAttachShader(polygons.program, vertex); glAttachShader(polygons.program, fragment); glLinkProgram(polygons.program);
@@ -675,38 +796,186 @@ int PolygonRenderer_InitOpenGL(void) {
 	GLint linked = 0; glGetProgramiv(polygons.program, GL_LINK_STATUS, &linked); if(!linked) return 1;
 	glGenVertexArrays(1, &polygons.vao); glGenBuffers(1, &polygons.vbo); glGenTextures(1, &polygons.texture);
 	glBindVertexArray(polygons.vao); glBindBuffer(GL_ARRAY_BUFFER, polygons.vbo);
-	const GLsizei stride = sizeof(GLPolygonVertex);
-	for(int i = 0; i < 4; i++) glEnableVertexAttribArray(i);
-	glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,stride,(void *)offsetof(GLPolygonVertex,position));
-	glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,stride,(void *)offsetof(GLPolygonVertex,uv));
-	glVertexAttribPointer(2,4,GL_FLOAT,GL_FALSE,stride,(void *)offsetof(GLPolygonVertex,color));
-	glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,stride,(void *)offsetof(GLPolygonVertex,textured));
+	BindPolygonVertexAttributes();
 	glBindTexture(GL_TEXTURE_2D, polygons.texture); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
 	glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,8,8,0,GL_BGRA,GL_UNSIGNED_BYTE,polygons.checker);
 	polygons.uploadedTexture=polygons.checker;polygons.uploadedTextureWidth=8;polygons.uploadedTextureHeight=8;
+	/* Fresh GL context: drop any stale static-mesh bookkeeping from a prior backend. */
+	polygons.staticVao = polygons.staticVbo = polygons.staticTex = 0;
+	polygons.staticVertexCount = 0;
+	polygons.staticSourceTriangleCount = -1;
+	polygons.staticTexture = NULL;
+	polygons.staticTextureWidth = polygons.staticTextureHeight = 0;
+	polygons.staticUploadedPixels = NULL;
+	polygons.staticUploadedWidth = polygons.staticUploadedHeight = 0;
 	return 0;
 }
 
-void PolygonRenderer_DrawOpenGL(Camera *camera, int width, int height) {
-	glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LESS);glUseProgram(polygons.program);
-	glUniform2f(glGetUniformLocation(polygons.program,"cameraPosition"),camera->position.x,camera->position.y);glUniform2f(glGetUniformLocation(polygons.program,"resolution"),(float)width,(float)height);
-	glUniform1f(glGetUniformLocation(polygons.program,"cameraHeight"),camera->height);glUniform1f(glGetUniformLocation(polygons.program,"horizon"),camera->horizon);glUniform1f(glGetUniformLocation(polygons.program,"angle"),camera->angle);glUniform1f(glGetUniformLocation(polygons.program,"distance"),camera->distance);
-	glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,polygons.texture);glUniform1i(glGetUniformLocation(polygons.program,"polygonTexture"),0);
-	glBindVertexArray(polygons.vao);glBindBuffer(GL_ARRAY_BUFFER,polygons.vbo);
-	for(int i=0;i<polygons.triangleCount;i++) {
-		const PolygonTriangle *t=&polygons.triangles[i];if(!TriangleFacesCamera(t,camera))continue;GLPolygonVertex vertices[3];
-		if(t->material->type==POLYGON_MATERIAL_TEXTURED&&
-			(t->material->texture!=polygons.uploadedTexture||t->material->textureWidth!=polygons.uploadedTextureWidth||t->material->textureHeight!=polygons.uploadedTextureHeight)){
-			glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,t->material->textureWidth,t->material->textureHeight,0,GL_BGRA,GL_UNSIGNED_BYTE,t->material->texture);
-			polygons.uploadedTexture=t->material->texture;polygons.uploadedTextureWidth=t->material->textureWidth;polygons.uploadedTextureHeight=t->material->textureHeight;
+void PolygonRenderer_ClearStaticMeshOpenGL(void) {
+	if(polygons.staticVbo)
+		glDeleteBuffers(1, &polygons.staticVbo);
+	if(polygons.staticVao)
+		glDeleteVertexArrays(1, &polygons.staticVao);
+	if(polygons.staticTex)
+		glDeleteTextures(1, &polygons.staticTex);
+	polygons.staticVbo = polygons.staticVao = polygons.staticTex = 0;
+	polygons.staticVertexCount = 0;
+	polygons.staticSourceTriangleCount = -1;
+	polygons.staticTexture = NULL;
+	polygons.staticTextureWidth = polygons.staticTextureHeight = 0;
+	polygons.staticUploadedPixels = NULL;
+	polygons.staticUploadedWidth = polygons.staticUploadedHeight = 0;
+}
+
+void PolygonRenderer_UploadStaticMeshOpenGL(
+	const PolygonTriangle *triangles, int triangleCount
+) {
+	if(polygons.program && polygons.staticVao &&
+		polygons.staticSourceTriangleCount == triangleCount)
+		return;
+
+	PolygonRenderer_ClearStaticMeshOpenGL();
+	if(!polygons.program || !triangles || triangleCount <= 0)
+		return;
+
+	const int vertexCount = triangleCount * 3;
+	GLPolygonVertex *vertices = SDL_malloc((size_t)vertexCount * sizeof(*vertices));
+	if(!vertices)
+		return;
+
+	int out = 0;
+	for(int i = 0; i < triangleCount; i++) {
+		const PolygonTriangle *triangle = &triangles[i];
+		if(!triangle->material)
+			continue;
+		if(!polygons.staticTexture &&
+			triangle->material->type == POLYGON_MATERIAL_TEXTURED &&
+			triangle->material->texture) {
+			polygons.staticTexture = triangle->material->texture;
+			polygons.staticTextureWidth = triangle->material->textureWidth;
+			polygons.staticTextureHeight = triangle->material->textureHeight;
 		}
-		for(int j=0;j<3;j++){const PolygonVertex *v=&t->vertex[j];GLPolygonVertex *out=&vertices[j];out->position[0]=v->x;out->position[1]=v->y;out->position[2]=v->z;out->uv[0]=v->u;out->uv[1]=v->v;const Uint32 c=t->material->color;out->color[0]=(float)((c>>16)&255)/255.;out->color[1]=(float)((c>>8)&255)/255.;out->color[2]=(float)(c&255)/255.;out->color[3]=(float)((c>>24)&255)/255.;out->textured=t->material->type==POLYGON_MATERIAL_TEXTURED?1.f:0.f;}
-		glBufferData(GL_ARRAY_BUFFER,sizeof(vertices),vertices,GL_STREAM_DRAW);glDrawArrays(GL_TRIANGLES,0,3);
+		for(int j = 0; j < 3; j++)
+			PackGLVertex(&vertices[out++], &triangle->vertex[j], triangle->material);
 	}
-	glBindVertexArray(0);glDisable(GL_DEPTH_TEST);
+	if(out <= 0) {
+		SDL_free(vertices);
+		return;
+	}
+
+	glGenVertexArrays(1, &polygons.staticVao);
+	glGenBuffers(1, &polygons.staticVbo);
+	glBindVertexArray(polygons.staticVao);
+	glBindBuffer(GL_ARRAY_BUFFER, polygons.staticVbo);
+	glBufferData(GL_ARRAY_BUFFER,
+		(GLsizeiptr)((size_t)out * sizeof(*vertices)), vertices, GL_STATIC_DRAW);
+	BindPolygonVertexAttributes();
+	glBindVertexArray(0);
+	polygons.staticVertexCount = out;
+	polygons.staticSourceTriangleCount = triangleCount;
+	SDL_free(vertices);
+}
+
+int PolygonRenderer_HasStaticMeshOpenGL(void) {
+	return polygons.program && polygons.staticVao && polygons.staticVertexCount > 0;
+}
+
+void PolygonRenderer_DrawStaticMeshOpenGL(Camera *camera, int width, int height) {
+	if(!PolygonRenderer_HasStaticMeshOpenGL())
+		return;
+	BindPolygonProgram(camera, width, height);
+	/* Own texture object so building draws cannot force a 2048² re-upload every frame. */
+	if(polygons.staticTexture) {
+		if(!polygons.staticTex) {
+			glGenTextures(1, &polygons.staticTex);
+			glBindTexture(GL_TEXTURE_2D, polygons.staticTex);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+		} else
+			glBindTexture(GL_TEXTURE_2D, polygons.staticTex);
+		if(polygons.staticTexture != polygons.staticUploadedPixels ||
+			polygons.staticTextureWidth != polygons.staticUploadedWidth ||
+			polygons.staticTextureHeight != polygons.staticUploadedHeight) {
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
+				polygons.staticTextureWidth, polygons.staticTextureHeight,
+				0, GL_BGRA, GL_UNSIGNED_BYTE, polygons.staticTexture);
+			polygons.staticUploadedPixels = polygons.staticTexture;
+			polygons.staticUploadedWidth = polygons.staticTextureWidth;
+			polygons.staticUploadedHeight = polygons.staticTextureHeight;
+		}
+	}
+	glBindVertexArray(polygons.staticVao);
+	glDrawArrays(GL_TRIANGLES, 0, polygons.staticVertexCount);
+	UnbindPolygonProgram();
+}
+
+void PolygonRenderer_DrawTriangleListOpenGL(
+	Camera *camera, int width, int height, const PolygonTriangle *triangles, int triangleCount
+) {
+	if(!triangles || triangleCount <= 0 || !polygons.program) return;
+	BindPolygonProgram(camera, width, height);
+	glBindVertexArray(polygons.vao);
+	glBindBuffer(GL_ARRAY_BUFFER, polygons.vbo);
+
+	int batchCount = 0;
+	int batchTextured = -1;
+	const Uint32 *batchTexture = NULL;
+	int batchTextureWidth = 0, batchTextureHeight = 0;
+
+	for(int i = 0; i < triangleCount; i++) {
+		const PolygonTriangle *triangle = &triangles[i];
+		if(!triangle->material)
+			continue;
+		if(!triangle->material->doubleSided && !TriangleFacesCamera(triangle, camera))
+			continue;
+
+		const int textured = triangle->material->type == POLYGON_MATERIAL_TEXTURED;
+		const int textureChanged = textured && (
+			triangle->material->texture != batchTexture ||
+			triangle->material->textureWidth != batchTextureWidth ||
+			triangle->material->textureHeight != batchTextureHeight);
+
+		if(batchCount > 0 && (textured != batchTextured || textureChanged)) {
+			FlushPolygonBatch(batchCount);
+			batchCount = 0;
+		}
+
+		if(textured && (textureChanged || batchTexture == NULL)) {
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
+				triangle->material->textureWidth, triangle->material->textureHeight,
+				0, GL_BGRA, GL_UNSIGNED_BYTE, triangle->material->texture);
+			polygons.uploadedTexture = triangle->material->texture;
+			polygons.uploadedTextureWidth = triangle->material->textureWidth;
+			polygons.uploadedTextureHeight = triangle->material->textureHeight;
+			batchTexture = triangle->material->texture;
+			batchTextureWidth = triangle->material->textureWidth;
+			batchTextureHeight = triangle->material->textureHeight;
+		}
+
+		if(!EnsureBatchCapacity(batchCount + 3))
+			break;
+		for(int j = 0; j < 3; j++)
+			PackGLVertex(&polygons.batchVertices[batchCount + j],
+				&triangle->vertex[j], triangle->material);
+		batchCount += 3;
+		batchTextured = textured;
+	}
+
+	FlushPolygonBatch(batchCount);
+	UnbindPolygonProgram();
+}
+
+void PolygonRenderer_DrawOpenGL(Camera *camera, int width, int height) {
+	PolygonRenderer_DrawTriangleListOpenGL(camera, width, height, polygons.triangles, polygons.triangleCount);
 }
 
 void PolygonRenderer_DestroyOpenGL(void) {
+	PolygonRenderer_ClearStaticMeshOpenGL();
+	SDL_free(polygons.batchVertices);
+	polygons.batchVertices = NULL;
+	polygons.batchCapacity = 0;
 	if(polygons.texture)glDeleteTextures(1,&polygons.texture);if(polygons.vbo)glDeleteBuffers(1,&polygons.vbo);if(polygons.vao)glDeleteVertexArrays(1,&polygons.vao);if(polygons.program)glDeleteProgram(polygons.program);
 	polygons.texture=polygons.vbo=polygons.vao=polygons.program=0;
 	polygons.uploadedTexture=NULL;polygons.uploadedTextureWidth=polygons.uploadedTextureHeight=0;

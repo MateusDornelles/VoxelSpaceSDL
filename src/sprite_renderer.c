@@ -91,7 +91,31 @@ void SpriteRenderer_DrawSoftware(Map*m,Camera*c){if(!m->screen||!m->depth||!spri
 #ifdef USE_OPENGL_RENDER
 typedef struct {float p[3],uv[2];} GLVertex;
 static GLuint Compile(GLenum type,const char*source){GLuint s=glCreateShader(type);glShaderSource(s,1,&source,NULL);glCompileShader(s);GLint ok=0;glGetShaderiv(s,GL_COMPILE_STATUS,&ok);if(!ok){glDeleteShader(s);return 0;}return s;}
-int SpriteRenderer_InitOpenGL(void){static const char*vs="#version 330 core\nlayout(location=0)in vec3 p;layout(location=1)in vec2 uv;uniform vec2 cameraPosition,resolution;uniform float cameraHeight,horizon,angle,distance;out vec2 fuv;void main(){float s=sin(angle),c=cos(angle);vec2 d=p.xy-cameraPosition;float z=-s*d.x-c*d.y,l=c*d.x-s*d.y;float ny=(1.-2.*horizon/resolution.y)*z-(2./2.5)*(cameraHeight-p.z);float n=1.,f=distance;gl_Position=vec4(l,ny,((f+n)/(f-n))*z-(2.*f*n/(f-n)),z);fuv=uv;}";static const char*fs="#version 330 core\nuniform sampler2D image;in vec2 fuv;out vec4 color;void main(){color=texture(image,fuv);if(color.a<.03)discard;}";GLuint v=Compile(GL_VERTEX_SHADER,vs),f=Compile(GL_FRAGMENT_SHADER,fs);if(!v||!f)return 1;sprites.program=glCreateProgram();glAttachShader(sprites.program,v);glAttachShader(sprites.program,f);glLinkProgram(sprites.program);glDeleteShader(v);glDeleteShader(f);GLint linked=0;glGetProgramiv(sprites.program,GL_LINK_STATUS,&linked);if(!linked)return 1;glGenVertexArrays(1,&sprites.vao);glGenBuffers(1,&sprites.vbo);glGenTextures(1,&sprites.texture);glBindVertexArray(sprites.vao);glBindBuffer(GL_ARRAY_BUFFER,sprites.vbo);glEnableVertexAttribArray(0);glEnableVertexAttribArray(1);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(GLVertex),(void*)0);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof(GLVertex),(void*)offsetof(GLVertex,uv));glBindTexture(GL_TEXTURE_2D,sprites.texture);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);return 0;}
+int SpriteRenderer_InitOpenGL(void){
+	static const char*vs=
+		"#version 330 core\n"
+		"layout(location=0)in vec3 p;layout(location=1)in vec2 uv;"
+		"uniform vec2 cameraPosition,resolution;"
+		"uniform float cameraHeight,horizon,angle,distance;"
+		"out vec2 fuv;out float fz;"
+		"void main(){"
+		"float s=sin(angle),c=cos(angle);vec2 d=p.xy-cameraPosition;"
+		"float z=-s*d.x-c*d.y,l=c*d.x-s*d.y;"
+		"float ny=(1.-2.*horizon/resolution.y)*z-(2./2.5)*(cameraHeight-p.z);"
+		"float n=1.,f=distance;"
+		"gl_Position=vec4(l,ny,((f+n)/(f-n))*z-(2.*f*n/(f-n)),z);"
+		"fuv=uv;fz=z;}";
+	static const char*fs=
+		"#version 330 core\n"
+		"uniform sampler2D image;uniform float distance;"
+		"in vec2 fuv;in float fz;out vec4 color;"
+		"vec3 fog(vec3 c,float z){"
+		"float t=smoothstep(distance*.5833,distance*.9667,z);"
+		"return mix(c,vec3(144.,224.,255.)/255.,t);}"
+		"void main(){"
+		"vec4 texel=texture(image,fuv);if(texel.a<.03)discard;"
+		"color=vec4(fog(texel.rgb,fz),texel.a);}";
+	GLuint v=Compile(GL_VERTEX_SHADER,vs),f=Compile(GL_FRAGMENT_SHADER,fs);if(!v||!f)return 1;sprites.program=glCreateProgram();glAttachShader(sprites.program,v);glAttachShader(sprites.program,f);glLinkProgram(sprites.program);glDeleteShader(v);glDeleteShader(f);GLint linked=0;glGetProgramiv(sprites.program,GL_LINK_STATUS,&linked);if(!linked)return 1;glGenVertexArrays(1,&sprites.vao);glGenBuffers(1,&sprites.vbo);glGenTextures(1,&sprites.texture);glBindVertexArray(sprites.vao);glBindBuffer(GL_ARRAY_BUFFER,sprites.vbo);glEnableVertexAttribArray(0);glEnableVertexAttribArray(1);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(GLVertex),(void*)0);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof(GLVertex),(void*)offsetof(GLVertex,uv));glBindTexture(GL_TEXTURE_2D,sprites.texture);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);return 0;}
 void SpriteRenderer_DrawOpenGL(Camera*c,int w,int h){if(!sprites.count)return;glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LESS);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glUseProgram(sprites.program);glUniform2f(glGetUniformLocation(sprites.program,"cameraPosition"),c->position.x,c->position.y);glUniform2f(glGetUniformLocation(sprites.program,"resolution"),(float)w,(float)h);glUniform1f(glGetUniformLocation(sprites.program,"cameraHeight"),c->height);glUniform1f(glGetUniformLocation(sprites.program,"horizon"),c->horizon);glUniform1f(glGetUniformLocation(sprites.program,"angle"),c->angle);glUniform1f(glGetUniformLocation(sprites.program,"distance"),c->distance);glUniform1i(glGetUniformLocation(sprites.program,"image"),0);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,sprites.texture);glBindVertexArray(sprites.vao);glBindBuffer(GL_ARRAY_BUFFER,sprites.vbo);float rx=SDL_cosf(c->angle),ry=-SDL_sinf(c->angle);
 	for(int i=0;i<sprites.count;i++){WorldSprite*s=&sprites.items[i];float hx=rx*s->width*.5f,hy=ry*s->width*.5f,z0=s->z,z1=s->z+s->height;GLVertex v[6]={{{s->x-hx,s->y-hy,z1},{0,0}},{{s->x+hx,s->y+hy,z1},{1,0}},{{s->x+hx,s->y+hy,z0},{1,1}},{{s->x-hx,s->y-hy,z1},{0,0}},{{s->x+hx,s->y+hy,z0},{1,1}},{{s->x-hx,s->y-hy,z0},{0,1}}};SpriteFrame*f=&s->frames[s->currentFrame];if(f->pixels!=sprites.uploadedPixels||s->pixelWidth!=sprites.uploadedWidth||s->pixelHeight!=sprites.uploadedHeight){glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,s->pixelWidth,s->pixelHeight,0,GL_BGRA,GL_UNSIGNED_BYTE,f->pixels);sprites.uploadedPixels=f->pixels;sprites.uploadedWidth=s->pixelWidth;sprites.uploadedHeight=s->pixelHeight;}glBufferData(GL_ARRAY_BUFFER,sizeof(v),v,GL_STREAM_DRAW);glDrawArrays(GL_TRIANGLES,0,6);}glBindVertexArray(0);glDisable(GL_BLEND);glDisable(GL_DEPTH_TEST);}
 void SpriteRenderer_DestroyOpenGL(void){if(sprites.texture)glDeleteTextures(1,&sprites.texture);if(sprites.vbo)glDeleteBuffers(1,&sprites.vbo);if(sprites.vao)glDeleteVertexArrays(1,&sprites.vao);if(sprites.program)glDeleteProgram(sprites.program);sprites.texture=sprites.vbo=sprites.vao=sprites.program=0;sprites.uploadedPixels=NULL;sprites.uploadedWidth=sprites.uploadedHeight=0;}

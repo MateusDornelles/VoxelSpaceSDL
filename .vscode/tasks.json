@@ -65,6 +65,65 @@
 		},
 		{
 			"type": "shell",
+			"label": "Configure VoxelSpace (Threaded)",
+			"command": "cmake",
+			"args": [
+				"-S", ".",
+				"-B", "build-threaded",
+				"-DCMAKE_BUILD_TYPE=Release",
+				"-DVOXEL_USE_THREADED_RENDER=ON",
+				"-DVOXEL_USE_AVX2=ON",
+				"-DVOXEL_USE_SDL_IMAGE=ON",
+				"-DVOXEL_USE_OVERLAY=OFF"
+			],
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "Build VoxelSpace (Threaded)",
+			"command": "cmake",
+			"args": ["--build", "build-threaded", "--config", "Release", "-j"],
+			"dependsOn": "Configure VoxelSpace (Threaded)",
+			"presentation": {
+				"echo": false,
+				"reveal": "silent",
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": true
+			},
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": "build"
+		},
+		{
+			"type": "shell",
+			"label": "Run VoxelSpace (Threaded)",
+			"linux": {
+				"command": "./build-threaded/bin/vs"
+			},
+			"windows": {
+				"command": ".\\build-threaded\\bin\\vs.exe"
+			},
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"label": "Build and Run VoxelSpace (Threaded)",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Build VoxelSpace (Threaded)",
+				"Run VoxelSpace (Threaded)"
+			],
+			"problemMatcher": []
+		},
+		{
+			"type": "shell",
 			"label": "Configure VoxelSpace (Profile)",
 			"command": "cmake",
 			"args": [

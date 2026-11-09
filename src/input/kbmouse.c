@@ -73,6 +73,9 @@ static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
 		case SDL_SCANCODE_V:
 			ToggleIsometricCamera();
 			break;
+		case SDL_SCANCODE_T:
+			Engine_ToggleTerrainMode();
+			break;
 		case SDL_SCANCODE_F10:
 			Engine_ToggleRenderer();
 			break;

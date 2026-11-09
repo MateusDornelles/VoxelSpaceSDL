@@ -768,6 +768,13 @@ static inline void ResetColumnBounds(Map *map, int pitch, int height) {
 	}
 }
 
+void Map_ClearSoftwareFrame(Map *map) {
+	if(!map->screen || !map->depth) return;
+	int *pixels = NULL, pitch = 0, height = 0;
+	PrepareToDraw(map, &pixels, &pitch, &height);
+	SDL_UnlockTexture((SDL_Texture *)map->screen);
+}
+
 #ifndef USE_THREADED_RENDER
 void Map_Draw(Map *map, Camera *cam) {
 	if(!map->redraw) return;

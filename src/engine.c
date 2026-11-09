@@ -11,6 +11,7 @@
 #include "map.h"
 #include "polygon_renderer.h"
 #include "sprite_renderer.h"
+#include "terrain_mesh.h"
 #ifdef USE_OPENGL_RENDER
 #include "opengl_renderer.h"
 #endif
@@ -37,6 +38,7 @@ struct sContext {
 	SDL_Renderer *render;
 	SDL_Texture *screen;
 	RendererBackend backend;
+	TerrainRenderMode terrainMode;
 	int integerScale, vsync;
 	struct sListener {
 		void(*func)(void *);
@@ -53,7 +55,8 @@ struct sContext {
 	},
 	.map = {
 		.ceilingBase = 520.0f
-	}
+	},
+	.terrainMode = TERRAIN_RAYCAST
 };
 
 static void CompareSDLVersions(const char *libname, const SDL_version *cv, const SDL_version *lv) {
@@ -366,6 +369,8 @@ int Engine_Start(EngineSettings *es) {
 			es->heightmap, buildingsPath, sizeof(buildingsPath));
 		PolygonRenderer_LoadBuildings(&ctx.map, buildingsPath);
 	}
+	if(ctx.map.ready)
+		TerrainMesh_Build(&ctx.map, TERRAIN_MESH_STEP_DEFAULT);
 	if(es->spritePath)
 		SpriteRenderer_AddAPNG(es->spritePath, es->spriteX, es->spriteY, es->spriteZ,
 			es->spriteWidth, es->spriteHeight);
@@ -458,7 +463,13 @@ int Engine_Update(void) {
 	} else
 #endif
 	{
-	Map_Draw(&ctx.map, &ctx.camera);
+	if(ctx.terrainMode == TERRAIN_RAYCAST) {
+		Map_Draw(&ctx.map, &ctx.camera);
+	} else if(ctx.map.redraw) {
+		Map_ClearSoftwareFrame(&ctx.map);
+		TerrainMesh_DrawSoftware(&ctx.map, &ctx.camera);
+		ctx.map.redraw = 0;
+	}
 	PolygonRenderer_DrawSoftware(&ctx.map, &ctx.camera);
 	SpriteRenderer_DrawSoftware(&ctx.map, &ctx.camera);
 
@@ -605,8 +616,25 @@ void Engine_Stop(void) {
 	ctx.stopped = 1;
 }
 
+void Engine_SetTerrainMode(TerrainRenderMode mode) {
+	ctx.terrainMode = mode;
+	ctx.map.redraw = 1;
+}
+
+TerrainRenderMode Engine_GetTerrainMode(void) {
+	return ctx.terrainMode;
+}
+
+void Engine_ToggleTerrainMode(void) {
+	ctx.terrainMode = (ctx.terrainMode == TERRAIN_RAYCAST) ? TERRAIN_POLYGONS : TERRAIN_RAYCAST;
+	ctx.map.redraw = 1;
+	SDL_Log("Terrain renderer: %s",
+		ctx.terrainMode == TERRAIN_RAYCAST ? "raycast" : "polygons");
+}
+
 void Engine_End(void) {
 	DestroyPresentationBackend();
+	TerrainMesh_Destroy();
 	PolygonRenderer_Destroy();
 	SpriteRenderer_Destroy();
 	Map_Close(&ctx.map);

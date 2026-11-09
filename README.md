@@ -26,7 +26,10 @@ Comanche's Voxel Space rendering algorithm written in C using SDL. You can try i
 * Shift + Space - Decrease render distance
 * LCTRL + Space - Reset render distance to default value
 * Alt + Enter - Toggle fullscreen
+* T - Toggle terrain renderer (voxel raycast / polygon mesh)
 * F10 - Switch between software and OpenGL rendering
+* V - Toggle isometric camera
+* I - Cycle integer scale
 
 ### Game Controller
 
