@@ -5,6 +5,7 @@
 #include "camera.h"
 #include "map.h"
 #include "polygon_renderer.h"
+#include "picking.h"
 #include "input.h"
 
 static int isOnTheGround = 0;
@@ -85,6 +86,7 @@ void Input_Update(void *ptr) {
 	// Request a world redraw if any control key was pressed
 	if(PollControllers(cam, delta * 0.03f) || ProcessKeyboard(cam, delta * 0.03f))
 		map->redraw = 1;
+	Picking_Update(delta);
 
 	float feetZ = cam->height - CAMERA_EYE_HEIGHT;
 	PolygonRenderer_ResolvePosition(
@@ -145,11 +147,17 @@ void Input_Event(void *ptr) {
 			ProcessKeyUp(ev->key.keysym.scancode);
 			break;
 		case SDL_MOUSEBUTTONDOWN:
-			if(ev->button.button == SDL_BUTTON_LEFT && !isMouseGrabbed)
-				SetMouseGrab(1);
+			if(ev->button.button == SDL_BUTTON_LEFT && !isMouseGrabbed) {
+				if(isPickCursorActive) {
+					/* Ctrl held: arrow cursor selects / click-to-move only. */
+					Picking_HandleClick(ev->button.x, ev->button.y);
+				} else if(!Picking_HandleClick(ev->button.x, ev->button.y)) {
+					SetMouseGrab(1);
+				}
+			}
 			break;
 		case SDL_MOUSEMOTION:
-			if(isMouseGrabbed)
+			if(isMouseGrabbed && !isPickCursorActive)
 				ProcessMouseMotion(ev->motion.xrel, ev->motion.yrel);
 			break;
 	}

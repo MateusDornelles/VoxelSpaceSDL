@@ -40,6 +40,7 @@ struct sContext {
 	RendererBackend backend;
 	TerrainRenderMode terrainMode;
 	int integerScale, vsync;
+	int renderWidth, renderHeight;
 	struct sListener {
 		void(*func)(void *);
 		struct sListener *next;
@@ -204,6 +205,8 @@ static int SpawnScreen(void) {
 			horizonRatio = ctx.camera.horizon / ctx.camera.maxhorizon;
 		OpenGLRenderer_Resize(renderWidth, renderHeight,
 			outputWidth, outputHeight, ctx.integerScale);
+		ctx.renderWidth = renderWidth;
+		ctx.renderHeight = renderHeight;
 		ctx.camera.maxhorizon = (float)renderHeight;
 		ctx.camera.horizon = horizonRatio * ctx.camera.maxhorizon;
 		Camera_ClampPitch(&ctx.camera);
@@ -218,6 +221,8 @@ static int SpawnScreen(void) {
 		renderWidth = wndWidth;
 		renderHeight = wndHeight;
 	}
+	ctx.renderWidth = renderWidth;
+	ctx.renderHeight = renderHeight;
 	SDL_Log(
 		"Render resolution: %dx%d, window: %dx%d, integer scale: %dx",
 		renderWidth, renderHeight, wndWidth, wndHeight, ctx.integerScale
@@ -606,6 +611,21 @@ void *Engine_GetWindow(void) {
 void Engine_GetObjects(Camera **cam, Map **map) {
 	if(cam) *cam = &ctx.camera;
 	if(map) *map = &ctx.map;
+}
+
+void Engine_GetPresentation(
+	int *renderWidth, int *renderHeight,
+	int *windowWidth, int *windowHeight,
+	int *integerScale
+) {
+	int wndWidth = 0, wndHeight = 0;
+	if(ctx.wnd)
+		SDL_GetWindowSize(ctx.wnd, &wndWidth, &wndHeight);
+	if(renderWidth) *renderWidth = ctx.renderWidth > 0 ? ctx.renderWidth : GRAPHICS_WIDTH;
+	if(renderHeight) *renderHeight = ctx.renderHeight > 0 ? ctx.renderHeight : GRAPHICS_HEIGHT;
+	if(windowWidth) *windowWidth = wndWidth;
+	if(windowHeight) *windowHeight = wndHeight;
+	if(integerScale) *integerScale = ctx.integerScale > 0 ? ctx.integerScale : 1;
 }
 
 float Engine_GetDeltaTime(void) {

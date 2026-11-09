@@ -1,5 +1,6 @@
 #include "sprite_renderer.h"
 #include "defines.h"
+#include "polygon_renderer.h"
 #include <SDL.h>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -83,6 +84,26 @@ void SpriteRenderer_Update(float dt){
 #endif
 }
 int SpriteRenderer_HasObjects(void){return sprites.count>0;}
+int SpriteRenderer_GetCount(void){return sprites.count;}
+int SpriteRenderer_GetPose(int index,float *x,float *y,float *z,float *width,float *height){
+	if(index<0||index>=sprites.count)return 0;
+	WorldSprite *s=&sprites.items[index];
+	if(x)*x=s->x;if(y)*y=s->y;if(z)*z=s->z;if(width)*width=s->width;if(height)*height=s->height;
+	return 1;
+}
+int SpriteRenderer_SetPosition(int index,float x,float y){
+	if(index<0||index>=sprites.count)return 0;
+	Camera *cam=NULL;Map *map=NULL;Engine_GetObjects(&cam,&map);
+	WorldSprite *s=&sprites.items[index];
+	s->x=x;s->y=y;
+	if(map&&map->ready){
+		Point p={x,y};
+		const float terrain=(float)Map_GetHeight(map,&p);
+		const float polygon=PolygonRenderer_GetSupportHeight(x,y);
+		s->z=max(terrain,polygon);
+	}
+	return 1;
+}
 static Uint32 Blend(Uint32 s,Uint32 d){unsigned a=s>>24;if(a==255)return s;if(!a)return d;unsigned ia=255-a,r=(((s>>16)&255)*a+((d>>16)&255)*ia+127)/255,g=(((s>>8)&255)*a+((d>>8)&255)*ia+127)/255,b=((s&255)*a+(d&255)*ia+127)/255;return 0xff000000u|(r<<16)|(g<<8)|b;}
 void SpriteRenderer_DrawSoftware(Map*m,Camera*c){if(!m->screen||!m->depth||!sprites.count)return;int w=0,h=0,pitchBytes=0;Uint32*pixels=NULL;SDL_QueryTexture((SDL_Texture*)m->screen,NULL,NULL,&w,&h);if(SDL_LockTexture((SDL_Texture*)m->screen,NULL,(void**)&pixels,&pitchBytes)!=0)return;int pitch=pitchBytes/4;float sn=SDL_sinf(c->angle),cs=SDL_cosf(c->angle),scale=(float)h/CAMERA_PROJECTION_SCALE;
 	for(int i=0;i<sprites.count;i++){WorldSprite*s=&sprites.items[i];float dx=s->x-c->position.x,dy=s->y-c->position.y,depth=-sn*dx-cs*dy,lateral=cs*dx-sn*dy;if(depth<=1||depth>=c->distance)continue;float cx=(lateral/depth+1)*(float)w*.5f,half=s->width/depth*(float)w*.5f,top=(c->height-(s->z+s->height))*scale/depth+c->horizon,bottom=(c->height-s->z)*scale/depth+c->horizon;int x0=max((int)SDL_floorf(cx-half),0),x1=min((int)SDL_ceilf(cx+half),w),y0=max((int)SDL_floorf(top),0),y1=min((int)SDL_ceilf(bottom),h);if(x0>=x1||y0>=y1||bottom<=top)continue;SpriteFrame*f=&s->frames[s->currentFrame];for(int y=y0;y<y1;y++){int sy=max(0,min((int)(((y-top)/(bottom-top))*s->pixelHeight),s->pixelHeight-1));for(int x=x0;x<x1;x++){int offset=y*w+x;if(depth>=m->depth[offset])continue;int sx=max(0,min((int)(((x-(cx-half))/(half*2))*s->pixelWidth),s->pixelWidth-1));Uint32 color=f->pixels[sy*s->pixelWidth+sx];if((color>>24)<8)continue;pixels[y*pitch+x]=Blend(color,pixels[y*pitch+x]);m->depth[offset]=depth;}}}

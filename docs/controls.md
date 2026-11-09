@@ -29,10 +29,12 @@ Referência dos controles atuais do VoxelSpace SDL (teclado, mouse e gamepad).
 | Entrada | Ação |
 | --- | --- |
 | **Movimento** (mouse capturado) | Olha em volta (yaw + pitch). No modo isométrico só gira o yaw (órbita). |
-| **Botão esquerdo** | Se o mouse não estiver capturado, captura de novo |
-| **Esc** (com mouse capturado) | Libera o mouse |
+| **Ctrl** (segura) | Mostra o cursor em seta e pausa o look; use o botão esquerdo para picking |
+| **Botão esquerdo** (com Ctrl) | Clica num Superman para selecionar; com um selecionado, clica no chão para ele andar até lá |
+| **Soltar Ctrl** | Volta ao mouse capturado (look) |
+| **Esc** | Com Ctrl/picking ativo, cancela o cursor; com mouse capturado, libera o cursor; senão fecha o app |
 
-Na inicialização o mouse já começa capturado (look livre).
+Na inicialização o mouse já começa capturado (look livre). Segure **Ctrl** para apontar e clicar nos sprites.
 
 ## Gamepad
 

@@ -36,6 +36,8 @@
 #define INPUT_SPRINT_MULTIPLIER 6.0f // Running speed relative to walking (3x prior sprint)
 #define INPUT_COLLISION_RADIUS 4.0f // Horizontal capsule radius against polygon colliders
 #define INPUT_COLLISION_ITERATIONS 3 // Push-out passes for overlapping polygon AABBs
+#define PICKING_MOVE_SPEED 80.0f // World units per second for click-to-move sprites
+#define PICKING_ARRIVE_EPSILON 2.0f // Stop moving when within this distance of the target
 
 #define CAMERA_MOVE_STEP 4.0f // Camera movement speed
 #define CAMERA_ANGLE_STEP 0.08f // Camera rotation step

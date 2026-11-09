@@ -60,6 +60,12 @@ TerrainRenderMode Engine_GetTerrainMode(void);
 void Engine_ToggleTerrainMode(void);
 void *Engine_GetWindow(void);
 void Engine_GetObjects(Camera **cam, Map **map);
+/* Internal render size, window size, and integer scale used for letterboxed presentation. */
+void Engine_GetPresentation(
+	int *renderWidth, int *renderHeight,
+	int *windowWidth, int *windowHeight,
+	int *integerScale
+);
 float Engine_GetDeltaTime(void);
 void Engine_AddListener(Listeners type, void(*func)(void *));
 void Engine_CallListeners(Listeners type, void *arg);

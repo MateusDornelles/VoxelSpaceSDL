@@ -10,11 +10,44 @@ extern float velocity;
 
 static SDL_Scancode input[INPUT_MAX_KEYBINDS] = {0};
 static int isMouseGrabbed = 0, isSprintActive = 0;
+static int isPickCursorActive = 0, restoreGrabAfterPick = 0;
+static int leftCtrlHeld = 0, rightCtrlHeld = 0;
 
 static inline void SetMouseGrab(int enabled) {
 	isMouseGrabbed = enabled;
 	SDL_SetRelativeMouseMode(enabled ? SDL_TRUE : SDL_FALSE);
 	SDL_SetWindowGrab(Engine_GetWindow(), enabled ? SDL_TRUE : SDL_FALSE);
+	SDL_ShowCursor(enabled ? SDL_DISABLE : SDL_ENABLE);
+}
+
+/* Hold Ctrl to show the arrow cursor and pick/move sprites without looking. */
+static void SetPickCursor(int enabled) {
+	if(enabled) {
+		if(isPickCursorActive)
+			return;
+		restoreGrabAfterPick = isMouseGrabbed;
+		isPickCursorActive = 1;
+		isMouseGrabbed = 0;
+		SDL_SetRelativeMouseMode(SDL_FALSE);
+		SDL_SetWindowGrab(Engine_GetWindow(), SDL_FALSE);
+		SDL_ShowCursor(SDL_ENABLE);
+		return;
+	}
+	if(!isPickCursorActive)
+		return;
+	isPickCursorActive = 0;
+	if(restoreGrabAfterPick)
+		SetMouseGrab(1);
+	else {
+		SDL_ShowCursor(SDL_ENABLE);
+		SDL_SetRelativeMouseMode(SDL_FALSE);
+		SDL_SetWindowGrab(Engine_GetWindow(), SDL_FALSE);
+	}
+	restoreGrabAfterPick = 0;
+}
+
+static void UpdatePickCursorFromCtrl(void) {
+	SetPickCursor(leftCtrlHeld || rightCtrlHeld);
 }
 
 static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
@@ -50,6 +83,14 @@ static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
 		case SDL_SCANCODE_LSHIFT:
 			isSprintActive = 1;
 			break;
+		case SDL_SCANCODE_LCTRL:
+			leftCtrlHeld = 1;
+			UpdatePickCursorFromCtrl();
+			break;
+		case SDL_SCANCODE_RCTRL:
+			rightCtrlHeld = 1;
+			UpdatePickCursorFromCtrl();
+			break;
 		case SDL_SCANCODE_C:
 			Camera_ResetPitch(cam);
 			map->redraw = 1;
@@ -84,6 +125,12 @@ static void ProcessKeyDown(SDL_Scancode code, Uint16 mod) {
 				Engine_ToggleFullscreen();
 			break;
 		case SDL_SCANCODE_ESCAPE:
+			if(isPickCursorActive) {
+				leftCtrlHeld = rightCtrlHeld = 0;
+				restoreGrabAfterPick = 0;
+				SetPickCursor(0);
+				break;
+			}
 			if(isMouseGrabbed) {
 				SetMouseGrab(0);
 				break;
@@ -115,6 +162,14 @@ static void ProcessKeyUp(SDL_Scancode code) {
 			break;
 		case SDL_SCANCODE_LSHIFT:
 			isSprintActive = 0;
+			break;
+		case SDL_SCANCODE_LCTRL:
+			leftCtrlHeld = 0;
+			UpdatePickCursorFromCtrl();
+			break;
+		case SDL_SCANCODE_RCTRL:
+			rightCtrlHeld = 0;
+			UpdatePickCursorFromCtrl();
 			break;
 		default: break;
 	}
